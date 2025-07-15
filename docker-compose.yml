@@ -1,0 +1,77 @@
+version: '3.7'
+services:
+  SPINE1:
+    image: ceos:4.32.4M
+    privileged: true
+    hostname: SPINE1
+    volumes:
+    - type: bind
+      source: /home/ceos/project3/SPINE1/ceos-config
+      target: /mnt/flash/ceos-config
+      read_only: true
+    - type: bind
+      source: /home/ceos/project3/SPINE1/EosIntfMapping.json
+      target: /mnt/flash/EosIntfMapping.json
+      read_only: true
+    - type: bind
+      source: /home/ceos/project3/setup_entropy.sh
+      target: /mnt/flash/setup_entropy.sh
+      read_only: true
+    environment:
+      CEOS: '1'
+      EOS_PLATFORM: ceoslab
+      container: docker
+      ETBA: '1'
+      INTFTYPE: eth
+      SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT: '1'
+    command: /sbin/init systemd.setenv=INTFTYPE=eth systemd.setenv=ETBA=1 systemd.setenv=CEOS=1
+      systemd.setenv=EOS_PLATFORM=ceoslab systemd.setenv=container=docker systemd.setenv=MAPETH0=1
+      systemd.setenv=MGMT_INTF=eth0
+    networks:
+    - a-135
+    - link01
+    - link02
+  LEAF1:
+    image: ceos:4.32.4M
+    privileged: true
+    hostname: LEAF1
+    volumes:
+    - type: bind
+      source: /home/ceos/project3/LEAF1/ceos-config
+      target: /mnt/flash/ceos-config
+      read_only: true
+    - type: bind
+      source: /home/ceos/project3/LEAF1/EosIntfMapping.json
+      target: /mnt/flash/EosIntfMapping.json
+      read_only: true
+    - type: bind
+      source: /home/ceos/project3/setup_entropy.sh
+      target: /mnt/flash/setup_entropy.sh
+      read_only: true
+    environment:
+      CEOS: '1'
+      EOS_PLATFORM: ceoslab
+      container: docker
+      ETBA: '1'
+      INTFTYPE: eth
+      SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT: '1'
+    command: /sbin/init systemd.setenv=INTFTYPE=eth systemd.setenv=ETBA=1 systemd.setenv=CEOS=1
+      systemd.setenv=EOS_PLATFORM=ceoslab systemd.setenv=container=docker systemd.setenv=MAPETH0=1
+      systemd.setenv=MGMT_INTF=eth0
+    networks:
+    - a-135
+    - link01
+    - link02
+networks:
+  a-135:
+    external: true
+  link01:
+    driver: bridge
+    ipam:
+      config:
+      - subnet: 172.16.68.0/24
+  link02:
+    driver: bridge
+    ipam:
+      config:
+      - subnet: 172.16.69.0/24
