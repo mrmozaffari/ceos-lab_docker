@@ -10,6 +10,7 @@ from collections import defaultdict
 DEFAULT_SUBNET_POOL = ipaddress.ip_network('172.16.0.0/16')
 DEFAULT_MGMT_NET = 'a-135'
 
+
 def get_existing_docker_subnets():
     try:
         network_ids = subprocess.check_output(['docker', 'network', 'ls', '-q']).decode().splitlines()
@@ -51,9 +52,16 @@ def generate_device_files(devices, connections):
             if intf not in interface_mapping_per_device[device]:
                 interface_mapping_per_device[device].append(intf)
 
+    # 📁 Create base `devices/` directory
+    base_devices_dir = os.path.abspath('devices')
+    os.makedirs(base_devices_dir, exist_ok=True)
+
     for device in devices:
-        device_dir = os.path.abspath(device)
+        # 📁 Put each device's files under ./devices/{device}/
+        device_dir = os.path.join(base_devices_dir, device)
         os.makedirs(device_dir, exist_ok=True)
+#        device_dir = os.path.abspath(device)
+#        os.makedirs(device_dir, exist_ok=True)
 
         ceos_config_path = os.path.join(device_dir, 'ceos-config')
         with open(ceos_config_path, 'w') as f:

@@ -6,15 +6,15 @@ services:
     hostname: SPINE1
     volumes:
     - type: bind
-      source: /home/ceos/project3/SPINE1/ceos-config
+      source: /home/ceos/repo/ceos-lab_docker/devices/SPINE1/ceos-config
       target: /mnt/flash/ceos-config
       read_only: true
     - type: bind
-      source: /home/ceos/project3/SPINE1/EosIntfMapping.json
+      source: /home/ceos/repo/ceos-lab_docker/devices/SPINE1/EosIntfMapping.json
       target: /mnt/flash/EosIntfMapping.json
       read_only: true
     - type: bind
-      source: /home/ceos/project3/setup_entropy.sh
+      source: /home/ceos/repo/ceos-lab_docker/setup_entropy.sh
       target: /mnt/flash/setup_entropy.sh
       read_only: true
     environment:
@@ -37,15 +37,15 @@ services:
     hostname: LEAF1
     volumes:
     - type: bind
-      source: /home/ceos/project3/LEAF1/ceos-config
+      source: /home/ceos/repo/ceos-lab_docker/devices/LEAF1/ceos-config
       target: /mnt/flash/ceos-config
       read_only: true
     - type: bind
-      source: /home/ceos/project3/LEAF1/EosIntfMapping.json
+      source: /home/ceos/repo/ceos-lab_docker/devices/LEAF1/EosIntfMapping.json
       target: /mnt/flash/EosIntfMapping.json
       read_only: true
     - type: bind
-      source: /home/ceos/project3/setup_entropy.sh
+      source: /home/ceos/repo/ceos-lab_docker/setup_entropy.sh
       target: /mnt/flash/setup_entropy.sh
       read_only: true
     environment:
@@ -69,9 +69,9 @@ networks:
     driver: bridge
     ipam:
       config:
-      - subnet: 172.16.68.0/24
+      - subnet: 172.16.70.0/24
   link02:
     driver: bridge
     ipam:
       config:
-      - subnet: 172.16.69.0/24
+      - subnet: 172.16.71.0/24
