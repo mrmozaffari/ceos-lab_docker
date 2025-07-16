@@ -1,5 +1,5 @@
 
-# 🚀 Docker Topology Generator
+# 🚀 Docker Topology Generator for cEOS
 
 This Python script generates a `docker-compose.yml` and per-device configuration files for a cEOS lab topology based on an input YAML topology file.  
 It also detects existing `ceos` Docker images and allows the user to pick one interactively.
@@ -9,8 +9,10 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
 ## 📋 Features
 
 - Parses a YAML topology file describing devices and connections.
+- Detects the MacVlan networks on docker host
+- Interact with user to create docker network (MacVlan)
 - Automatically assigns **non-overlapping** subnets to each link.
-- Detects existing Docker networks to avoid conflicts.
+- Detects existing Docker networks(subnets) to avoid conflicts.
 - Lists available `ceos`/`ceos64` Docker images and lets the user choose which one to use.
 - Generates:
   - `docker-compose.yml` to deploy the topology.
