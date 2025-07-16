@@ -136,6 +136,12 @@ def generate_compose(devices, links, mgmt_net, volume_paths):
                     'source': os.path.abspath('setup_entropy.sh'),
                     'target': '/mnt/flash/setup_entropy.sh',
                     'read_only': True
+                },
+                {
+                    'type': 'bind',
+                    'source': os.path.abspath('enable_entropy.sh'),
+                    'target': '/mnt/flash/enable_entropy.sh',
+                    'read_only': True
                 }
             ],
             'environment': {
