@@ -1,4 +1,4 @@
-management_network: my_macvlan_net
+management_network: a-135
 subnet_pool: 172.16.0.0/16
 connections:
 - device1: SPINE1

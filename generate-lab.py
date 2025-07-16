@@ -232,6 +232,16 @@ def main():
     for link in links:
         print(f"  {link['net_name']}: {link['device1']} ({link['intf1']}) <--> {link['device2']} ({link['intf2']}) => {link['subnet']}")
 
+    print("\n✅ docker-compose.yml file has been generated successfully. 🎉")
+    print("👉 You can now run the following command to create your lab:")
+    print("\n   docker compose up -d\n")
+
+    view_choice = input("👀 Would you like to view the content of docker-compose.yml now? [y/N]: ").strip().lower()
+    if view_choice == 'y':
+        print("\n📄 Contents of docker-compose.yml:\n")
+        with open("docker-compose.yml") as f:
+            print(f.read())
+
 
 if __name__ == "__main__":
     main()
