@@ -192,7 +192,7 @@ docker-compose up -d
 
 ## 🛑 Tear Down the Lab
 
-To stop and remove all containers, networks, and volumes created by this stack, from the same directory where the `docker-compose.yml` file resides run:   
+To stop and remove all containers, networks, and volumes created by this stack, from the same directory where the `docker-compose.yml` file resides run:  
 
 ```bash
 docker-compose down
