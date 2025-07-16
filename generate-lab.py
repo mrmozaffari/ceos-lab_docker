@@ -109,9 +109,10 @@ def generate_device_files(devices, connections, dry_run):
             json.dump(mapping, f, indent=2)
 
         volume_paths[device] = {
-            'ceos_config': os.path.join(device_dir, 'ceos-config'),
-            'eos_mapping': os.path.join(device_dir, 'EosIntfMapping.json')
+            'ceos_config': os.path.abspath(os.path.join(device_dir, 'ceos-config')),
+            'eos_mapping': os.path.abspath(os.path.join(device_dir, 'EosIntfMapping.json'))
         }
+        
 
     return volume_paths
 
