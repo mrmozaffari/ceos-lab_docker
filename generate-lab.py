@@ -112,7 +112,7 @@ def generate_device_files(devices, connections, dry_run):
             'ceos_config': os.path.abspath(os.path.join(device_dir, 'ceos-config')),
             'eos_mapping': os.path.abspath(os.path.join(device_dir, 'EosIntfMapping.json'))
         }
-        
+
 
     return volume_paths
 
@@ -226,7 +226,7 @@ def main():
 
     if not args.dry_run:
         print("\n✅ docker-compose.yml generated successfully. 🎉\n")
-        print("👉 To start your lab:\n   docker compose up -d\n\n👉 To tear it down:\n   docker compose down\n")
+        print("👉 To start your lab:\n   docker-compose up -d\n\n👉 To tear it down:\n   docker-compose down\n")
         show = input("👀 Would you like to see the contents of docker-compose.yml? [y/N]: ").strip().lower()
         if show == 'y':
             with open('docker-compose.yml') as f:
