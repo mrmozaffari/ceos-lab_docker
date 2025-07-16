@@ -9,8 +9,9 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
 ## 📋 Features
 
 - Parses a YAML topology file describing devices and connections.
-- Detects the MacVlan networks on docker host
-- Interact with user to create docker network (MacVlan)
+- Detects existing macvlan networks on the Docker host and lets the user pick one.
+- Guides the user to create a new macvlan management network (tied to a physical interface) if none exists.
+- Automatically updates topology.yml with the selected/created management network.
 - Automatically assigns **non-overlapping** subnets to each link.
 - Detects existing Docker networks(subnets) to avoid conflicts.
 - Lists available `ceos`/`ceos64` Docker images and lets the user choose which one to use.
@@ -60,8 +61,16 @@ Replace the filename and tag with the version you downloaded.
 
 ⚠️ **Important:**
 
-By default, the script assumes there is an existing external Docker network called `a-135` for management.  
-If you want to create a custom macvlan management network (e.g., `a-150`) tied to a specific host interface, follow the steps in the dedicated guide below:
+By default, the script checks if there is an existing Docker macvlan network for management (`a-135` if already present).  
+
+If no macvlan management network exists, or if you want to use a different one, the script will:
+
+- Detect all existing macvlan networks and let you pick one.
+- Or guide you through creating a new macvlan network tied to a physical host interface.
+- Automatically update `topology.yml` with the chosen network name.
+
+You no longer need to manually create or configure the management network beforehand — the script handles it interactively for you.
+If you still prefer to create a macvlan network manually or want to learn more about how it works, see the dedicated guide below:
 
 📄 [Setup Management Network](SETUP_MANAGEMENT_NETWORK.md)
 
@@ -105,9 +114,7 @@ python3 generate-lab.py topology.yml
 - Per-device directories in `devices/` with:
   
   - `ceos-config`: device serial number, MAC address, and TFA version.
-  
   - `EosIntfMapping.json`: management and ethernet interface mappings.
-  
 - A `docker-compose.yml` with all devices, configured volumes, networks, and the chosen Docker image.
 
 
@@ -116,6 +123,7 @@ python3 generate-lab.py topology.yml
 Starting with later versions of **cEOS-lab**, the **TFA v2 format** was introduced.  
 
 In **TFA v2**:
+
 - The EOS container image already **includes the required persistent file system inside the image itself**, so you no longer need a separate `ceos-config` tarball to boot.
 - This **simplifies deployment**, because you only deal with the container image.
 
@@ -129,7 +137,7 @@ The `TFA_VERSION=2` variable is simply a marker in scripts or configurations tha
 
 When run, the script will print something like:
 
-```
+```text
 📋 Available ceos images:
   1. ceos64:4.34.1F
   2. ceos:4.32.4M
@@ -160,6 +168,7 @@ When run, the script will print something like:
 
 Entropy in Linux systems is the randomness collected from hardware sources, used to generate secure random numbers (e.g., for SSH keys, TLS sessions).  
 When entropy is low, operations that depend on random numbers can block or fail, which may result in:
+
 - Long boot times for cEOS containers.
 - Services like SSH hanging on startup.
 - Reduced security of cryptographic operations if weak random numbers are used.
@@ -194,6 +203,7 @@ docker-compose down
 ## 🧰 Enabling Haveged in cEOS
 
 This script copies two helper files into `/mnt/flash` of each container:
+
 - `setup_entropy.sh`
 - `enable_entropy.sh`
 
@@ -205,15 +215,14 @@ cd /mnt/flash
 ./enable_entropy.sh
 ```
 
-This starts haveged inside the cEOS container, increasing entropy and avoiding stalls.   
-   
+This starts haveged inside the cEOS container, increasing entropy and avoiding stalls.
 Optional: The `setup_entropy.sh` installs the latest Haveged in cEOS, for that you would need to configure mgmt with IP address, default gateway or static route and DNS on your cEOS so it can communicate with Internet.
 
 ---
 
 ## 🛑 Notes
 
-- The script assumes the management network (`a-135` by default) already exists as an **external Docker network**. 
+- The script detects or creates the management network interactively as needed.
 - Subnet pool defaults to `172.16.0.0/16` if not specified in the topology file.
 - If no `ceos`/`ceos64` images are found locally, the script exits with an error.
 
@@ -222,9 +231,9 @@ Optional: The `setup_entropy.sh` installs the latest Haveged in cEOS, for that y
 ## 📚 Extending
 
 You can enhance this script by:
+
 - Adding validation of the topology file.
 - Supporting other image tags or platforms.
-- Automatically creating the management network if missing.
 - Adding command-line options to skip prompts (for automation).
 
 ---
