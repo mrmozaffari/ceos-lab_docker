@@ -11,6 +11,28 @@ If you want to use a **macvlan** network instead — for example to put containe
 
 ---
 
+## Check if you currently have any macvlan docker network and if the network currently associated with an interface
+
+From the bash of the host run following commands:
+
+```bash
+docker network ls
+```
+
+Your output might be different, here is an example:
+```
+NETWORK ID     NAME        DRIVER    SCOPE
+3e5cf2...      bridge      bridge    local
+b7e34a...      host        host      local
+e4b5e7...      none        null      local
+1d4e5b...      a-135       macvlan   local
+9c6f1a...      a-150       bridge    local
+```
+
+As you can see there is a network name with macvlan called a-135, if you don't see proceed to [Step-by-Step](#step-by-step)
+
+---
+
 ## 🔷 Step-by-Step
 
 ### 1️⃣ Create a macvlan network
