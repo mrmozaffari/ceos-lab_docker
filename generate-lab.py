@@ -29,6 +29,7 @@ def get_existing_docker_subnets():
         print(f"Error getting Docker network info: {e}")
         sys.exit(1)
 
+
 def next_subnet(used_subnets, existing_docker_subnets, base_subnet, prefixlen=24):
     for subnet in base_subnet.subnets(new_prefix=prefixlen):
         if subnet in used_subnets or any(subnet.overlaps(existing) for existing in existing_docker_subnets):
@@ -37,9 +38,11 @@ def next_subnet(used_subnets, existing_docker_subnets, base_subnet, prefixlen=24
         return subnet
     raise Exception("No more available subnets!")
 
+
 def mac_from_name(name):
     h = hashlib.md5(name.encode()).hexdigest()
     return f'02:{h[0:2]}:{h[2:4]}:{h[4:6]}:{h[6:8]}:{h[8:10]}'
+
 
 def generate_device_files(devices, connections):
     volume_paths = {}
@@ -52,16 +55,12 @@ def generate_device_files(devices, connections):
             if intf not in interface_mapping_per_device[device]:
                 interface_mapping_per_device[device].append(intf)
 
-    # 📁 Create base `devices/` directory
     base_devices_dir = os.path.abspath('devices')
     os.makedirs(base_devices_dir, exist_ok=True)
 
     for device in devices:
-        # 📁 Put each device's files under ./devices/{device}/
         device_dir = os.path.join(base_devices_dir, device)
         os.makedirs(device_dir, exist_ok=True)
-#        device_dir = os.path.abspath(device)
-#        os.makedirs(device_dir, exist_ok=True)
 
         ceos_config_path = os.path.join(device_dir, 'ceos-config')
         with open(ceos_config_path, 'w') as f:
@@ -90,7 +89,34 @@ def generate_device_files(devices, connections):
 
     return volume_paths
 
-def generate_compose(devices, links, mgmt_net, volume_paths):
+
+def pick_ceos_image():
+    try:
+        output = subprocess.check_output(['docker', 'image', 'ls', '--format', '{{.Repository}}:{{.Tag}}']).decode()
+        all_images = output.splitlines()
+        ceos_images = [img for img in all_images if img.startswith('ceos') or img.startswith('ceos64')]
+
+        if not ceos_images:
+            print("❌ No ceos or ceos64 images found locally.")
+            sys.exit(1)
+
+        print("\n📋 Available ceos images:")
+        for idx, img in enumerate(ceos_images, start=1):
+            print(f"  {idx}. {img}")
+
+        while True:
+            choice = input("\n👉 Enter the number of the image you want to use: ")
+            if not choice.isdigit() or not (1 <= int(choice) <= len(ceos_images)):
+                print("⚠️ Invalid choice. Please enter a valid number.")
+                continue
+            return ceos_images[int(choice) - 1]
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error listing Docker images: {e}")
+        sys.exit(1)
+
+
+def generate_compose(devices, links, mgmt_net, volume_paths, image):
     compose = {
         'version': '3.7',
         'services': {},
@@ -99,7 +125,6 @@ def generate_compose(devices, links, mgmt_net, volume_paths):
         }
     }
 
-    # Assign padded link names: link01, link02, ...
     for idx, link in enumerate(links, start=1):
         net_name = f'link{idx:02d}'
         link['net_name'] = net_name
@@ -115,7 +140,7 @@ def generate_compose(devices, links, mgmt_net, volume_paths):
         ]
 
         compose['services'][device] = {
-            'image': 'ceos:4.32.4M',
+            'image': image,
             'privileged': True,
             'hostname': device,
             'volumes': [
@@ -164,9 +189,10 @@ def generate_compose(devices, links, mgmt_net, volume_paths):
     with open('docker-compose.yml', 'w') as f:
         yaml.dump(compose, f, default_flow_style=False, sort_keys=False)
 
+
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python3 gen8.py <topology_file.yml>")
+        print("Usage: python3 generate-lab.py <topology_file.yml>")
         sys.exit(1)
 
     topo_file = sys.argv[1]
@@ -198,13 +224,14 @@ def main():
         for device, intf in [(link['device1'], link['intf1']), (link['device2'], link['intf2'])]:
             devices.setdefault(device, set()).add(intf)
 
+    chosen_image = pick_ceos_image()
     volume_paths = generate_device_files(devices, connections)
-    generate_compose(devices, links, mgmt_net, volume_paths)
+    generate_compose(devices, links, mgmt_net, volume_paths, chosen_image)
 
     print("\n✅ Subnets assigned to links:")
     for link in links:
         print(f"  {link['net_name']}: {link['device1']} ({link['intf1']}) <--> {link['device2']} ({link['intf2']}) => {link['subnet']}")
 
+
 if __name__ == "__main__":
     main()
-
