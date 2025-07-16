@@ -1,9 +1,27 @@
-management_network: a-136
+management_network: my_macvlan_net
 subnet_pool: 172.16.0.0/16
 connections:
-  - { device1: SPINE1, intf1: Ethernet1/1,  device2: LEAF1,  intf2: Ethernet1 }
-  - { device1: SPINE1, intf1: Ethernet1/2,  device2: LEAF1,  intf2: Ethernet2 }
-  - { device1: SPINE1, intf1: Ethernet1/3,  device2: LEAF2,  intf2: Ethernet1 }
-  - { device1: SPINE1, intf1: Ethernet1/4,  device2: LEAF2,  intf2: Ethernet2 }
-  - { device1: LEAF1,  intf1: Ethernet97/1, device2: LEAF2,  intf2: Ethernet97/1 }
-  - { device1: LEAF1,  intf1: Ethernet98/1, device2: LEAF2,  intf2: Ethernet98/1 }
+- device1: SPINE1
+  intf1: Ethernet1/1
+  device2: LEAF1
+  intf2: Ethernet1
+- device1: SPINE1
+  intf1: Ethernet1/2
+  device2: LEAF1
+  intf2: Ethernet2
+- device1: SPINE1
+  intf1: Ethernet1/3
+  device2: LEAF2
+  intf2: Ethernet1
+- device1: SPINE1
+  intf1: Ethernet1/4
+  device2: LEAF2
+  intf2: Ethernet2
+- device1: LEAF1
+  intf1: Ethernet97/1
+  device2: LEAF2
+  intf2: Ethernet97/1
+- device1: LEAF1
+  intf1: Ethernet98/1
+  device2: LEAF2
+  intf2: Ethernet98/1

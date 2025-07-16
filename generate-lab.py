@@ -6,9 +6,9 @@ import hashlib
 import subprocess
 import json
 from collections import defaultdict
+from mgmt_network import ensure_or_select_mgmt_network
 
 DEFAULT_SUBNET_POOL = ipaddress.ip_network('172.16.0.0/16')
-DEFAULT_MGMT_NET = 'a-135'
 
 
 def get_existing_docker_subnets():
@@ -90,33 +90,31 @@ def generate_device_files(devices, connections):
     return volume_paths
 
 
-def pick_ceos_image():
+def select_ceos_image():
     try:
-        output = subprocess.check_output(['docker', 'image', 'ls', '--format', '{{.Repository}}:{{.Tag}}']).decode()
-        all_images = output.splitlines()
-        ceos_images = [img for img in all_images if img.startswith('ceos') or img.startswith('ceos64')]
-
-        if not ceos_images:
-            print("❌ No ceos or ceos64 images found locally.")
+        output = subprocess.check_output(['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}']).decode()
+        images = [line for line in output.splitlines() if line.startswith('ceos')]
+        if not images:
+            print("❌ No ceos images found. Please import one and try again.")
             sys.exit(1)
 
         print("\n📋 Available ceos images:")
-        for idx, img in enumerate(ceos_images, start=1):
+        for idx, img in enumerate(images, 1):
             print(f"  {idx}. {img}")
 
         while True:
-            choice = input("\n👉 Enter the number of the image you want to use: ")
-            if not choice.isdigit() or not (1 <= int(choice) <= len(ceos_images)):
+            choice = input("👉 Enter the number of the image you want to use: ").strip()
+            if not choice.isdigit() or not (1 <= int(choice) <= len(images)):
                 print("⚠️ Invalid choice. Please enter a valid number.")
                 continue
-            return ceos_images[int(choice) - 1]
+            return images[int(choice)-1]
 
     except subprocess.CalledProcessError as e:
-        print(f"Error listing Docker images: {e}")
+        print(f"❌ Error listing Docker images: {e}")
         sys.exit(1)
 
 
-def generate_compose(devices, links, mgmt_net, volume_paths, image):
+def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image):
     compose = {
         'version': '3.7',
         'services': {},
@@ -140,7 +138,7 @@ def generate_compose(devices, links, mgmt_net, volume_paths, image):
         ]
 
         compose['services'][device] = {
-            'image': image,
+            'image': ceos_image,
             'privileged': True,
             'hostname': device,
             'volumes': [
@@ -192,7 +190,7 @@ def generate_compose(devices, links, mgmt_net, volume_paths, image):
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python3 generate-lab.py <topology_file.yml>")
+        print("Usage: python3 gen8.py <topology_file.yml>")
         sys.exit(1)
 
     topo_file = sys.argv[1]
@@ -203,9 +201,11 @@ def main():
     with open(topo_file) as f:
         topo = yaml.safe_load(f)
 
-    mgmt_net = topo.get('management_network', DEFAULT_MGMT_NET)
     base_subnet = ipaddress.ip_network(topo.get('subnet_pool', str(DEFAULT_SUBNET_POOL)))
     connections = topo.get('connections', [])
+
+    # 🔷 Detect or create/select mgmt network
+    mgmt_net = ensure_or_select_mgmt_network(topo_file)
 
     existing_docker_subnets = get_existing_docker_subnets()
     devices = {}
@@ -224,9 +224,9 @@ def main():
         for device, intf in [(link['device1'], link['intf1']), (link['device2'], link['intf2'])]:
             devices.setdefault(device, set()).add(intf)
 
-    chosen_image = pick_ceos_image()
+    ceos_image = select_ceos_image()
     volume_paths = generate_device_files(devices, connections)
-    generate_compose(devices, links, mgmt_net, volume_paths, chosen_image)
+    generate_compose(devices, links, mgmt_net, volume_paths, ceos_image)
 
     print("\n✅ Subnets assigned to links:")
     for link in links:
