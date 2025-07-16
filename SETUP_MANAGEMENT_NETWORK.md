@@ -15,11 +15,12 @@ If you want to use a **macvlan** network instead — for example to put containe
 
 ### 📝 Workflow
 
-1️⃣ During execution of `python3 generate-lab.py topology.yml`, the script checks for any existing macvlan Docker network.  
-2️⃣ If none are found, it will prompt you and walk you through creating one.  
-3️⃣ If macvlan networks are found, it will list them and let you pick one.  
-4️⃣ If you select or create a network **other than `a-135`**, the script automatically updates your `topology.yml` with the chosen network name and informs you.  
-5️⃣ The script then proceeds to generate the final `docker-compose.yml` file.
+✅ During execution of **python3 generate-lab.py topology.yml**, the script:  
+> 1️⃣ Checks for any existing macvlan Docker network.  
+> 2️⃣ If none are found, prompts you and walks you through creating one.  
+> 3️⃣ If macvlan networks are found, lists them and lets you pick one.  
+> 4️⃣ If you select or create a network other than a-135, the script automatically updates your topology.yml with the chosen network name and informs you.  
+> 5️⃣ The script then proceeds to generate the final docker-compose.yml file.  
 
 ---
 
@@ -82,13 +83,12 @@ You should see an output like this:
 
 Here, "parent": "ens192" shows which host interface the macvlan is bound to.
 
-
-
 ---
 
 ## 🔷 Step-by-Step
 
 ### 1️⃣ Create a macvlan network
+
 If you prefer to create a macvlan network manually (instead of letting the script handle it), run this command:
 
 ```bash
@@ -105,3 +105,9 @@ Replace:
 - 10.240.135.1 → with your desired gateway
 - ens192 → with your host interface
 - a-135 → with your desired network name
+
+#### 📌 Notes
+
+- You can create the macvlan ahead of time and let the script detect it.
+- Or you can simply let the script create it interactively when needed.
+- Either way, the script will update your topology.yml accordingly.

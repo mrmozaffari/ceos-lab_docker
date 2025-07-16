@@ -1,5 +1,3 @@
-# Single DC L3LS
-
 management_network: a-135
 subnet_pool: 172.16.0.0/16
 

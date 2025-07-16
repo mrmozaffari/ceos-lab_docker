@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+
+import argparse
 import os
 import sys
 import yaml
@@ -5,29 +8,59 @@ import ipaddress
 import hashlib
 import subprocess
 import json
+import logging
 from collections import defaultdict
 from mgmt_network import ensure_or_select_mgmt_network
+
 
 DEFAULT_SUBNET_POOL = ipaddress.ip_network('172.16.0.0/16')
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Generate docker-compose.yml and device configs for cEOS lab."
+    )
+    parser.add_argument(
+        'topology',
+        nargs='?',
+        default='topology.yml',
+        help='Topology YAML file (default: topology.yml)'
+    )
+    parser.add_argument('--auto', action='store_true', help='Run in non-interactive mode with defaults')
+    parser.add_argument('--dry-run', action='store_true', help='Validate everything but don’t create files or networks')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose logging to generate-lab.log')
+    return parser.parse_args()
+
+
+def setup_logging(verbose):
+    if verbose:
+        logging.basicConfig(
+            filename='generate-lab.log',
+            level=logging.INFO,
+            format='%(asctime)s %(levelname)s: %(message)s'
+        )
+        logging.info("Logging started")
+
+
+def validate_topology(topo):
+    if not isinstance(topo, dict):
+        raise ValueError("Topology file is not a YAML dictionary")
+    if 'connections' not in topo or not isinstance(topo['connections'], list):
+        raise ValueError("Missing or invalid 'connections' section")
+    for conn in topo['connections']:
+        if not all(k in conn for k in ('device1', 'intf1', 'device2', 'intf2')):
+            raise ValueError(f"Invalid connection entry: {conn}")
+
+
 def get_existing_docker_subnets():
-    try:
-        network_ids = subprocess.check_output(['docker', 'network', 'ls', '-q']).decode().splitlines()
-        if not network_ids:
-            return set()
-        existing_subnets = set()
-        for net_id in network_ids:
-            output = subprocess.check_output(['docker', 'network', 'inspect', net_id])
-            network_info = json.loads(output.decode())[0]
-            if 'IPAM' in network_info and 'Config' in network_info['IPAM']:
-                for cfg in network_info['IPAM']['Config']:
-                    if 'Subnet' in cfg:
-                        existing_subnets.add(ipaddress.ip_network(cfg['Subnet']))
-        return existing_subnets
-    except subprocess.CalledProcessError as e:
-        print(f"Error getting Docker network info: {e}")
-        sys.exit(1)
+    output = subprocess.check_output(['docker', 'network', 'ls', '-q']).decode().splitlines()
+    existing_subnets = set()
+    for net_id in output:
+        info = json.loads(subprocess.check_output(['docker', 'network', 'inspect', net_id]).decode())[0]
+        for cfg in info.get('IPAM', {}).get('Config', []):
+            if 'Subnet' in cfg:
+                existing_subnets.add(ipaddress.ip_network(cfg['Subnet']))
+    return existing_subnets
 
 
 def next_subnet(used_subnets, existing_docker_subnets, base_subnet, prefixlen=24):
@@ -44,80 +77,75 @@ def mac_from_name(name):
     return f'02:{h[0:2]}:{h[2:4]}:{h[4:6]}:{h[6:8]}:{h[8:10]}'
 
 
-def generate_device_files(devices, connections):
+def generate_device_files(devices, connections, dry_run):
     volume_paths = {}
     interface_mapping_per_device = defaultdict(list)
 
     for conn in connections:
         for dev_key, intf_key in [('device1', 'intf1'), ('device2', 'intf2')]:
-            device = conn[dev_key]
-            intf = conn[intf_key]
-            if intf not in interface_mapping_per_device[device]:
-                interface_mapping_per_device[device].append(intf)
+            interface_mapping_per_device[conn[dev_key]].append(conn[intf_key])
 
-    base_devices_dir = os.path.abspath('devices')
-    os.makedirs(base_devices_dir, exist_ok=True)
+    if dry_run:
+        print("📝 Dry-run: would generate device configs.")
+        return {}
 
-    for device in devices:
-        device_dir = os.path.join(base_devices_dir, device)
+    os.makedirs('devices', exist_ok=True)
+
+    for device, intfs in interface_mapping_per_device.items():
+        device_dir = os.path.join('devices', device)
         os.makedirs(device_dir, exist_ok=True)
 
-        ceos_config_path = os.path.join(device_dir, 'ceos-config')
-        with open(ceos_config_path, 'w') as f:
+        with open(os.path.join(device_dir, 'ceos-config'), 'w') as f:
             f.write(f"SERIALNUMBER={device.upper()}-SN\n")
             f.write(f"SYSTEMMACADDR={mac_from_name(device)}\n")
             f.write("TFA_VERSION=2\n")
 
-        ordered_intfs = interface_mapping_per_device[device]
         mapping = {
             "ManagementIntf": {"eth0": "Management1"},
-            "EthernetIntf": {f"eth{idx+1}": iface for idx, iface in enumerate(ordered_intfs)}
+            "EthernetIntf": {f"eth{i+1}": iface for i, iface in enumerate(intfs)}
         }
 
-        eos_mapping_path = os.path.join(device_dir, 'EosIntfMapping.json')
-        with open(eos_mapping_path, 'w') as f:
+        with open(os.path.join(device_dir, 'EosIntfMapping.json'), 'w') as f:
             json.dump(mapping, f, indent=2)
 
         volume_paths[device] = {
-            'ceos_config': ceos_config_path,
-            'eos_mapping': eos_mapping_path
+            'ceos_config': os.path.join(device_dir, 'ceos-config'),
+            'eos_mapping': os.path.join(device_dir, 'EosIntfMapping.json')
         }
 
     return volume_paths
 
 
-def select_ceos_image():
-    try:
-        output = subprocess.check_output(['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}']).decode()
-        images = [line for line in output.splitlines() if line.startswith('ceos')]
-        if not images:
-            print("❌ No ceos images found. Please import one and try again.")
-            sys.exit(1)
-
-        print("\n📋 Available ceos images:")
-        for idx, img in enumerate(images, 1):
-            print(f"  {idx}. {img}")
-
-        while True:
-            choice = input("👉 Enter the number of the image you want to use: ").strip()
-            if not choice.isdigit() or not (1 <= int(choice) <= len(images)):
-                print("⚠️ Invalid choice. Please enter a valid number.")
-                continue
-            return images[int(choice)-1]
-
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error listing Docker images: {e}")
+def select_ceos_image(auto, dry_run):
+    output = subprocess.check_output(['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}']).decode()
+    images = [line for line in output.splitlines() if line.startswith('ceos')]
+    if not images:
+        print("❌ No ceos images found. Please import one and try again.")
         sys.exit(1)
 
+    print("\n📋 Available ceos images:")
+    for idx, img in enumerate(images, 1):
+        print(f"  {idx}. {img}")
 
-def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image):
-    compose = {
-        'version': '3.7',
-        'services': {},
-        'networks': {mgmt_net: {'external': True}}
-    }
+    if auto or dry_run:
+        print(f"✅ Auto/Dry-run: would select {images[0]}")
+        return images[0]
 
-    for idx, link in enumerate(links, start=1):
+    while True:
+        choice = input("👉 Enter the number of the image you want to use: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(images):
+            return images[int(choice)-1]
+        print("⚠️ Invalid choice. Try again.")
+
+
+def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run):
+    if dry_run:
+        print("📝 Dry-run: would generate docker-compose.yml.")
+        return
+
+    compose = {'version': '3.7', 'services': {}, 'networks': {mgmt_net: {'external': True}}}
+
+    for idx, link in enumerate(links, 1):
         net_name = f'link{idx:02d}'
         link['net_name'] = net_name
         compose['networks'][net_name] = {
@@ -126,18 +154,16 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image):
         }
 
     for device in devices:
-        paths = volume_paths[device]
-        service_networks = [mgmt_net] + [link['net_name'] for link in links if device in (link['device1'], link['device2'])]
+        nets = [mgmt_net] + [link['net_name'] for link in links if device in (link['device1'], link['device2'])]
+        paths = volume_paths.get(device, {})
 
         compose['services'][device] = {
             'image': ceos_image,
             'privileged': True,
             'hostname': device,
             'volumes': [
-                {'type': 'bind', 'source': paths["ceos_config"], 'target': '/mnt/flash/ceos-config', 'read_only': True},
-                {'type': 'bind', 'source': paths["eos_mapping"], 'target': '/mnt/flash/EosIntfMapping.json', 'read_only': True},
-                {'type': 'bind', 'source': os.path.abspath('setup_entropy.sh'), 'target': '/mnt/flash/setup_entropy.sh', 'read_only': True},
-                {'type': 'bind', 'source': os.path.abspath('enable_entropy.sh'), 'target': '/mnt/flash/enable_entropy.sh', 'read_only': True}
+                {'type': 'bind', 'source': paths.get("ceos_config", ""), 'target': '/mnt/flash/ceos-config', 'read_only': True},
+                {'type': 'bind', 'source': paths.get("eos_mapping", ""), 'target': '/mnt/flash/EosIntfMapping.json', 'read_only': True},
             ],
             'environment': {
                 'CEOS': '1', 'EOS_PLATFORM': 'ceoslab', 'container': 'docker',
@@ -149,7 +175,7 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image):
                 'systemd.setenv=container=docker systemd.setenv=MAPETH0=1 '
                 'systemd.setenv=MGMT_INTF=eth0'
             ),
-            'networks': service_networks
+            'networks': nets
         }
 
     with open('docker-compose.yml', 'w') as f:
@@ -157,87 +183,55 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image):
 
 
 def main():
-    print("ℹ️  Run with `-h` or `--help` for usage instructions.\n")
+    args = parse_args()
+    setup_logging(args.verbose)
 
-    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] in ('-h', '--help')):
-        print("""
-Usage: python3 generate-lab.py [topology_file.yml]
-
-If no topology file is provided, defaults to: topology.yml
-
-This script will:
-✅ Detect or create a macvlan management network
-✅ Let you select a cEOS image
-✅ Auto-assign subnets and generate docker-compose.yml
-✅ Optionally show you the generated docker-compose.yml
-
-After running:
-👉 Start your lab with: docker compose up -d
-""")
-        sys.exit(0)
-
-    topo_file = sys.argv[1] if len(sys.argv) == 2 else "topology.yml"
-
-    if not os.path.isfile(topo_file):
-        print(f"Error: File '{topo_file}' does not exist.")
+    if not os.path.isfile(args.topology):
+        print(f"❌ Topology file '{args.topology}' does not exist.")
         sys.exit(1)
 
-    with open(topo_file) as f:
+    with open(args.topology) as f:
         topo = yaml.safe_load(f)
 
-    base_subnet = ipaddress.ip_network(topo.get('subnet_pool', str(DEFAULT_SUBNET_POOL)))
-    connections = topo.get('connections', [])
-
-    created_mgmt_net = None
-
     try:
-        mgmt_net, created_by_us = ensure_or_select_mgmt_network(topo_file)
-        if created_by_us:
-            created_mgmt_net = mgmt_net
-
-        existing_docker_subnets = get_existing_docker_subnets()
-        devices = {}
-        used_subnets = set()
-        links = []
-
-        for link in connections:
-            subnet = next_subnet(used_subnets, existing_docker_subnets, base_subnet)
-            links.append({
-                'device1': link['device1'],
-                'intf1': link['intf1'],
-                'device2': link['device2'],
-                'intf2': link['intf2'],
-                'subnet': subnet
-            })
-            for device, intf in [(link['device1'], link['intf1']), (link['device2'], link['intf2'])]:
-                devices.setdefault(device, set()).add(intf)
-
-        ceos_image = select_ceos_image()
-        volume_paths = generate_device_files(devices, connections)
-        generate_compose(devices, links, mgmt_net, volume_paths, ceos_image)
-
-        print("\n✅ Subnets assigned to links:")
-        for link in links:
-            print(f"  {link['net_name']}: {link['device1']} ({link['intf1']}) <--> {link['device2']} ({link['intf2']}) => {link['subnet']}")
-
-        print("\n✅ docker-compose.yml file has been generated successfully. 🎉")
-        print("👉 You can now run the following command to create your lab:\n")
-        print("   docker compose up -d\n")
-
-        view_choice = input("👀 Would you like to view the content of docker-compose.yml now? [y/N]: ").strip().lower()
-        if view_choice == 'y':
-            print("\n📄 Contents of docker-compose.yml:\n")
-            with open("docker-compose.yml") as f:
-                print(f.read())
-
-    except KeyboardInterrupt:
-        print("\n⛔ Script interrupted by user.")
-        if created_mgmt_net:
-            print(f"🧹 Cleaning up created management network: {created_mgmt_net}")
-            subprocess.run(["docker", "network", "rm", created_mgmt_net])
-        else:
-            print("🚫 Existing management network was not removed.")
+        validate_topology(topo)
+    except Exception as e:
+        print(f"❌ Invalid topology file: {e}")
         sys.exit(1)
+
+    base_subnet = ipaddress.ip_network(topo.get('subnet_pool', str(DEFAULT_SUBNET_POOL)))
+    connections = topo['connections']
+
+    mgmt_net, _ = ensure_or_select_mgmt_network(args.topology, auto=args.auto, dry_run=args.dry_run)
+
+    existing_docker_subnets = get_existing_docker_subnets()
+    devices = {}
+    used_subnets = set()
+    links = []
+
+    for link in connections:
+        subnet = next_subnet(used_subnets, existing_docker_subnets, base_subnet)
+        links.append({
+            'device1': link['device1'], 'intf1': link['intf1'],
+            'device2': link['device2'], 'intf2': link['intf2'],
+            'subnet': subnet
+        })
+        devices.setdefault(link['device1'], set()).add(link['intf1'])
+        devices.setdefault(link['device2'], set()).add(link['intf2'])
+
+    ceos_image = select_ceos_image(auto=args.auto, dry_run=args.dry_run)
+    volume_paths = generate_device_files(devices, connections, dry_run=args.dry_run)
+    generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run=args.dry_run)
+
+    if not args.dry_run:
+        print("\n✅ docker-compose.yml generated successfully. 🎉\n")
+        print("👉 To start your lab:\n   docker compose up -d\n\n👉 To tear it down:\n   docker compose down\n")
+        show = input("👀 Would you like to see the contents of docker-compose.yml? [y/N]: ").strip().lower()
+        if show == 'y':
+            with open('docker-compose.yml') as f:
+                print("\n" + f.read())
+    else:
+        print("\n📝 Dry-run completed successfully.")
 
 
 if __name__ == "__main__":
