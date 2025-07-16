@@ -1,4 +1,6 @@
-# Single DC L3LS 
+# Topology Examples
+
+## Single DC L3LS
 
 ![Network Topology](images/avd-single-dc-l3ls-example.svg "Topology diagram")
 
@@ -7,7 +9,7 @@
 &emsp;
 👉 Save the following yml in topology.yml or your custom topology yml file - You can replace the names, change the management network and subnet pool
 
-```
+```yaml
 management_network: a-135
 subnet_pool: 172.16.0.0/16
 
@@ -50,15 +52,12 @@ connections:
   - { device1: LEAF2-SERVER1, intf1: Ethernet2, device2: LEAF2C, intf2: Ethernet5 } #iLo
   - { device1: LEAF2-SERVER1, intf1: Ethernet3, device2: LEAF2B, intf2: Ethernet5 } #PCI2
 ```
- 
-&emsp;
-
-
 
 &emsp;
 
+&emsp;
 
-# L2LS Fabric
+## L2LS Fabric
 
 ![Network Topology](images/pure_L2LS_topo.svg "Topology diagram")
 
@@ -67,7 +66,7 @@ connections:
 &emsp;
 👉 Save the following yml in topology.yml or your custom topology yml file - You can replace the names, change the management network and subnet pool
 
-```
+```yaml
 management_network: a-135
 subnet_pool: 172.16.0.0/16
 

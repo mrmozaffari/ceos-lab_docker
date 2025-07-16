@@ -24,7 +24,7 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
 
 After running the script:
 
-```
+```text
 .
 ├── docker-compose.yml
 ├── devices/
@@ -54,7 +54,8 @@ docker import cEOS64-lab-4.34.1F.tar.xz ceos64:4.34.1F
 
 Replace the filename and tag with the version you downloaded.
 
---- 
+---
+
 ### 📡 Management Network
 
 ⚠️ **Important:**
@@ -100,10 +101,27 @@ python3 generate-lab.py topology.yml
 3️⃣ Lists all local Docker images whose repository starts with `ceos` or `ceos64`.  
 4️⃣ Prompts the user to pick one of the available images.  
 5️⃣ Generates:
-   - Per-device directories in `devices/` with:
-     - `ceos-config`: device serial number, MAC address, and TFA version.
-     - `EosIntfMapping.json`: management and ethernet interface mappings.
-   - A `docker-compose.yml` with all devices, configured volumes, networks, and the chosen Docker image.
+
+- Per-device directories in `devices/` with:
+  
+  - `ceos-config`: device serial number, MAC address, and TFA version.
+  
+  - `EosIntfMapping.json`: management and ethernet interface mappings.
+  
+- A `docker-compose.yml` with all devices, configured volumes, networks, and the chosen Docker image.
+
+
+### 🔷  What is `TFA_VERSION=2`?
+
+Starting with later versions of **cEOS-lab**, the **TFA v2 format** was introduced.  
+
+In **TFA v2**:
+- The EOS container image already **includes the required persistent file system inside the image itself**, so you no longer need a separate `ceos-config` tarball to boot.
+- This **simplifies deployment**, because you only deal with the container image.
+
+The `TFA_VERSION=2` variable is simply a marker in scripts or configurations that tells the cEOS-lab tooling:
+
+> Use the newer single-file image with integrated persistent filesystem (TFA v2), not the old two-file setup.
 
 ---
 
