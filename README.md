@@ -197,10 +197,10 @@ root@docker:/ceos-lab_docker# python3 generate-lab.py
 
 ✅ docker-compose.yml generated successfully. 🎉
 👉 To start your lab:
-   docker compose up -d
+   docker-compose up -d
 
 👉 To tear it down:
-   docker compose down
+   docker-compose down
 
 ```
 
