@@ -6,6 +6,36 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
 
 ---
 
+<details>
+<summary>📑 Table of Contents</summary>
+
+- [🚀 Docker Topology Generator for cEOS](#-docker-topology-generator-for-ceos)
+  - [� Features](#-features)
+  - [📂 Directory Structure](#-directory-structure)
+  - [🔧 Requirements](#-requirements)
+    - [📡 Management Network](#-management-network)
+  - [📝 Usage](#-usage)
+    - [Input Topology File](#input-topology-file)
+    - [Command Line Options](#command-line-options)
+    - [Example Commands](#example-commands)
+    - [Run the Script](#run-the-script)
+  - [👨‍💻 Workflow](#-workflow)
+  - [📦 Example Output](#-example-output)
+  - [📄 Key Files Generated](#-key-files-generated)
+    - [🔷  What is `TFA_VERSION=2`?](#--what-is-tfa_version2)
+  - [🐳 Run the lab with Docker](#-run-the-lab-with-docker)
+  - [🛑 Tear Down the Lab](#-tear-down-the-lab)
+  - [🔄 Entropy and cEOS](#-entropy-and-ceos)
+    - [Why does entropy matter?](#why-does-entropy-matter)
+  - [🧰 Enabling Haveged in cEOS](#-enabling-haveged-in-ceos)
+  - [🛑 Notes](#-notes)
+  - [📚 Extending](#-extending)
+
+</details>
+
+
+---
+
 ## 📋 Features
 
 - Parses a YAML topology file describing devices and connections.
