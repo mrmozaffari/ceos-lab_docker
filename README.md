@@ -10,6 +10,8 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
 
 - [🚀 Docker Topology Generator for cEOS](#-docker-topology-generator-for-ceos)
   - [📑 Table of Contents](#-table-of-contents)
+  - [🛑 Before you Begin](#-before-you-begin)
+    - [📝 Available Options](#-available-options)
   - [📋 Features](#-features)
   - [📂 Directory Structure](#-directory-structure)
   - [🔧 Requirements](#-requirements)
@@ -24,12 +26,24 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
   - [📄 Key Files Generated](#-key-files-generated)
     - [🔷  What is `TFA_VERSION=2`?](#--what-is-tfa_version2)
   - [🐳 Run the lab with Docker](#-run-the-lab-with-docker)
+    - [🔬🧪 Name of the Lab (Important)](#-name-of-the-lab-important)
   - [🛑 Tear Down the Lab](#-tear-down-the-lab)
   - [🔄 Entropy and cEOS](#-entropy-and-ceos)
     - [Why does entropy matter?](#why-does-entropy-matter)
   - [🧰 Enabling Haveged in cEOS](#-enabling-haveged-in-ceos)
   - [🛑 Notes](#-notes)
   - [📚 Extending](#-extending)
+
+---
+
+## 🛑 Before you Begin
+
+It's very important to run this lab on a host that already allows LLDP and LACP. You may be able to allow LLDP (You can use lab-helper.py) to fix LLDP and also increase the MTU on bridge interfaces, but LACP on most of linux machine cannot be allowed by changing the group_fwd_mask.  
+
+### 📝 Available Options
+
+- Use a Linux with custom kernel to allow LLDP, LACP (Advance)
+- Use available Linux version used for iOU, EVE-NG, Containcer-Lab
 
 ---
 
@@ -235,7 +249,19 @@ From the directory or folder of project where the `docker-compose.yml` file resi
 
 ```bash
 docker-compose up -d
+
+root@docker:/home/ceos/repo/ceos-lab_docker# docker-compose up -d
+[+] Building 0.0s (0/0)                                                                              docker:default
+[+] Running 4/4
+ ✔ Network ceos-lab_docker_link01      Created                                                                 0.3s
+ ✔ Network ceos-lab_docker_link02      Created                                                                 0.3s
+ ✔ Container ceos-lab_docker-LEAF1A-1  Started                                                                 1.8s
+ ✔ Container ceos-lab_docker-SPINE1-1  Started                                                                 1.8s
 ```
+
+### 🔬🧪 Name of the Lab (Important)
+
+If you use docker-compose the name of the lab will be your last folder you have docker-compose.yml and generated your lab. You will need the lab name to run the **lab-helper.py** to allow LLDP or change the MTU for the links. Click here for [📋 Features](#-features)
 
 ---
 
