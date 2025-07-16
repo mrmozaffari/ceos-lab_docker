@@ -70,12 +70,8 @@ def generate_device_files(devices, connections):
 
         ordered_intfs = interface_mapping_per_device[device]
         mapping = {
-            "ManagementIntf": {
-                "eth0": "Management1"
-            },
-            "EthernetIntf": {
-                f"eth{idx+1}": iface for idx, iface in enumerate(ordered_intfs)
-            }
+            "ManagementIntf": {"eth0": "Management1"},
+            "EthernetIntf": {f"eth{idx+1}": iface for idx, iface in enumerate(ordered_intfs)}
         }
 
         eos_mapping_path = os.path.join(device_dir, 'EosIntfMapping.json')
@@ -118,9 +114,7 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image):
     compose = {
         'version': '3.7',
         'services': {},
-        'networks': {
-            mgmt_net: {'external': True}
-        }
+        'networks': {mgmt_net: {'external': True}}
     }
 
     for idx, link in enumerate(links, start=1):
@@ -133,47 +127,21 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image):
 
     for device in devices:
         paths = volume_paths[device]
-        service_networks = [mgmt_net] + [
-            link['net_name'] for link in links if device in (link['device1'], link['device2'])
-        ]
+        service_networks = [mgmt_net] + [link['net_name'] for link in links if device in (link['device1'], link['device2'])]
 
         compose['services'][device] = {
             'image': ceos_image,
             'privileged': True,
             'hostname': device,
             'volumes': [
-                {
-                    'type': 'bind',
-                    'source': paths["ceos_config"],
-                    'target': '/mnt/flash/ceos-config',
-                    'read_only': True
-                },
-                {
-                    'type': 'bind',
-                    'source': paths["eos_mapping"],
-                    'target': '/mnt/flash/EosIntfMapping.json',
-                    'read_only': True
-                },
-                {
-                    'type': 'bind',
-                    'source': os.path.abspath('setup_entropy.sh'),
-                    'target': '/mnt/flash/setup_entropy.sh',
-                    'read_only': True
-                },
-                {
-                    'type': 'bind',
-                    'source': os.path.abspath('enable_entropy.sh'),
-                    'target': '/mnt/flash/enable_entropy.sh',
-                    'read_only': True
-                }
+                {'type': 'bind', 'source': paths["ceos_config"], 'target': '/mnt/flash/ceos-config', 'read_only': True},
+                {'type': 'bind', 'source': paths["eos_mapping"], 'target': '/mnt/flash/EosIntfMapping.json', 'read_only': True},
+                {'type': 'bind', 'source': os.path.abspath('setup_entropy.sh'), 'target': '/mnt/flash/setup_entropy.sh', 'read_only': True},
+                {'type': 'bind', 'source': os.path.abspath('enable_entropy.sh'), 'target': '/mnt/flash/enable_entropy.sh', 'read_only': True}
             ],
             'environment': {
-                'CEOS': '1',
-                'EOS_PLATFORM': 'ceoslab',
-                'container': 'docker',
-                'ETBA': '1',
-                'INTFTYPE': 'eth',
-                'SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT': '1'
+                'CEOS': '1', 'EOS_PLATFORM': 'ceoslab', 'container': 'docker',
+                'ETBA': '1', 'INTFTYPE': 'eth', 'SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT': '1'
             },
             'command': (
                 '/sbin/init systemd.setenv=INTFTYPE=eth systemd.setenv=ETBA=1 '
@@ -189,11 +157,27 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python3 gen8.py <topology_file.yml>")
-        sys.exit(1)
+    print("ℹ️  Run with `-h` or `--help` for usage instructions.\n")
 
-    topo_file = sys.argv[1]
+    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] in ('-h', '--help')):
+        print("""
+Usage: python3 generate-lab.py [topology_file.yml]
+
+If no topology file is provided, defaults to: topology.yml
+
+This script will:
+✅ Detect or create a macvlan management network
+✅ Let you select a cEOS image
+✅ Auto-assign subnets and generate docker-compose.yml
+✅ Optionally show you the generated docker-compose.yml
+
+After running:
+👉 Start your lab with: docker compose up -d
+""")
+        sys.exit(0)
+
+    topo_file = sys.argv[1] if len(sys.argv) == 2 else "topology.yml"
+
     if not os.path.isfile(topo_file):
         print(f"Error: File '{topo_file}' does not exist.")
         sys.exit(1)
@@ -204,43 +188,56 @@ def main():
     base_subnet = ipaddress.ip_network(topo.get('subnet_pool', str(DEFAULT_SUBNET_POOL)))
     connections = topo.get('connections', [])
 
-    # 🔷 Detect or create/select mgmt network
-    mgmt_net = ensure_or_select_mgmt_network(topo_file)
+    created_mgmt_net = None
 
-    existing_docker_subnets = get_existing_docker_subnets()
-    devices = {}
-    used_subnets = set()
-    links = []
+    try:
+        mgmt_net, created_by_us = ensure_or_select_mgmt_network(topo_file)
+        if created_by_us:
+            created_mgmt_net = mgmt_net
 
-    for link in connections:
-        subnet = next_subnet(used_subnets, existing_docker_subnets, base_subnet)
-        links.append({
-            'device1': link['device1'],
-            'intf1': link['intf1'],
-            'device2': link['device2'],
-            'intf2': link['intf2'],
-            'subnet': subnet
-        })
-        for device, intf in [(link['device1'], link['intf1']), (link['device2'], link['intf2'])]:
-            devices.setdefault(device, set()).add(intf)
+        existing_docker_subnets = get_existing_docker_subnets()
+        devices = {}
+        used_subnets = set()
+        links = []
 
-    ceos_image = select_ceos_image()
-    volume_paths = generate_device_files(devices, connections)
-    generate_compose(devices, links, mgmt_net, volume_paths, ceos_image)
+        for link in connections:
+            subnet = next_subnet(used_subnets, existing_docker_subnets, base_subnet)
+            links.append({
+                'device1': link['device1'],
+                'intf1': link['intf1'],
+                'device2': link['device2'],
+                'intf2': link['intf2'],
+                'subnet': subnet
+            })
+            for device, intf in [(link['device1'], link['intf1']), (link['device2'], link['intf2'])]:
+                devices.setdefault(device, set()).add(intf)
 
-    print("\n✅ Subnets assigned to links:")
-    for link in links:
-        print(f"  {link['net_name']}: {link['device1']} ({link['intf1']}) <--> {link['device2']} ({link['intf2']}) => {link['subnet']}")
+        ceos_image = select_ceos_image()
+        volume_paths = generate_device_files(devices, connections)
+        generate_compose(devices, links, mgmt_net, volume_paths, ceos_image)
 
-    print("\n✅ docker-compose.yml file has been generated successfully. 🎉")
-    print("👉 You can now run the following command to create your lab:")
-    print("\n   docker compose up -d\n")
+        print("\n✅ Subnets assigned to links:")
+        for link in links:
+            print(f"  {link['net_name']}: {link['device1']} ({link['intf1']}) <--> {link['device2']} ({link['intf2']}) => {link['subnet']}")
 
-    view_choice = input("👀 Would you like to view the content of docker-compose.yml now? [y/N]: ").strip().lower()
-    if view_choice == 'y':
-        print("\n📄 Contents of docker-compose.yml:\n")
-        with open("docker-compose.yml") as f:
-            print(f.read())
+        print("\n✅ docker-compose.yml file has been generated successfully. 🎉")
+        print("👉 You can now run the following command to create your lab:\n")
+        print("   docker compose up -d\n")
+
+        view_choice = input("👀 Would you like to view the content of docker-compose.yml now? [y/N]: ").strip().lower()
+        if view_choice == 'y':
+            print("\n📄 Contents of docker-compose.yml:\n")
+            with open("docker-compose.yml") as f:
+                print(f.read())
+
+    except KeyboardInterrupt:
+        print("\n⛔ Script interrupted by user.")
+        if created_mgmt_net:
+            print(f"🧹 Cleaning up created management network: {created_mgmt_net}")
+            subprocess.run(["docker", "network", "rm", created_mgmt_net])
+        else:
+            print("🚫 Existing management network was not removed.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

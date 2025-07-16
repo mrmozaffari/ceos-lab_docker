@@ -1,39 +1,55 @@
 import subprocess
-import sys
-import re
 import yaml
 import os
 
+
 def list_existing_macvlan_networks():
-    """Returns a list of (name, parent) for existing macvlan networks."""
-    result = []
-    try:
-        output = subprocess.check_output(['docker', 'network', 'ls', '--filter', 'driver=macvlan', '--format', '{{.Name}}']).decode()
-        names = [line.strip() for line in output.splitlines() if line.strip()]
-        for name in names:
-            inspect = subprocess.check_output(['docker', 'network', 'inspect', name]).decode()
-            match = re.search(r'"parent":\s*"([^"]+)"', inspect)
-            parent = match.group(1) if match else "unknown"
-            result.append((name, parent))
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error listing macvlan networks: {e}")
-        sys.exit(1)
-    return result
+    """
+    Returns a list of tuples: [(name, parent_iface), ...]
+    """
+    output = subprocess.check_output(
+        ['docker', 'network', 'ls', '--filter', 'driver=macvlan', '--format', '{{.Name}}']
+    ).decode()
 
-def pick_host_interface():
-    output = subprocess.check_output(['ip', '-o', 'link', 'show']).decode()
-    interfaces = []
-    for line in output.strip().splitlines():
-        match = re.match(r'\d+: ([^:]+):', line)
-        if match:
-            name = match.group(1)
-            if name.startswith('lo') or name.startswith('docker') or name.startswith('br-') or name.startswith('veth'):
-                continue
-            interfaces.append(name)
+    names = output.strip().splitlines()
+    networks = []
+    for name in names:
+        inspect = subprocess.check_output(['docker', 'network', 'inspect', name]).decode()
+        details = yaml.safe_load(inspect)[0]
+        parent = details.get('Options', {}).get('parent', 'unknown')
+        networks.append((name, parent))
+    return networks
 
+
+def list_physical_interfaces():
+    """
+    Lists only physical host interfaces (has /sys/class/net/<iface>/device).
+    """
+    physical = []
+    for iface in os.listdir('/sys/class/net'):
+        if os.path.exists(f'/sys/class/net/{iface}/device'):
+            physical.append(iface)
+    return physical
+
+
+def create_macvlan_network():
+    """
+    Prompts user to create a new macvlan network.
+    Returns (network_name, parent_iface)
+    """
+    default_name = 'a-135'
+    default_subnet = '192.168.150.0/24'
+    default_gateway = '192.168.150.1'
+
+    name = input(f"📋 Enter name for the new macvlan network (default: {default_name}): ").strip() or default_name
+    subnet = input(f"📋 Enter subnet (default: {default_subnet}): ").strip() or default_subnet
+    gateway = input(f"📋 Enter gateway (default: {default_gateway}): ").strip() or default_gateway
+
+    # List physical interfaces
+    interfaces = list_physical_interfaces()
     if not interfaces:
-        print("❌ No suitable network interfaces found.")
-        sys.exit(1)
+        print("❌ No physical interfaces found on host. Cannot create macvlan network.")
+        exit(1)
 
     print("\n📋 Available host interfaces:")
     for idx, iface in enumerate(interfaces, 1):
@@ -41,60 +57,57 @@ def pick_host_interface():
 
     while True:
         choice = input("👉 Enter the number of the interface to use: ").strip()
-        if not choice.isdigit() or not (1 <= int(choice) <= len(interfaces)):
-            print("⚠️ Invalid choice. Please enter a valid number.")
-            continue
-        return interfaces[int(choice)-1]
+        if choice.isdigit() and 1 <= int(choice) <= len(interfaces):
+            parent = interfaces[int(choice) - 1]
+            break
+        else:
+            print("⚠️ Invalid choice. Try again.")
 
-def create_macvlan_network():
-    name = input("📋 Enter name for the new macvlan network (default: a-135): ").strip() or "a-135"
-    subnet = input("📋 Enter subnet (default: 192.168.150.0/24): ").strip() or "192.168.150.0/24"
-    gateway = input("📋 Enter gateway (default: 192.168.150.1): ").strip() or "192.168.150.1"
-    parent = pick_host_interface()
-
-    cmd = [
-        'docker', 'network', 'create', '-d', 'macvlan',
-        '--subnet', subnet,
-        '--gateway', gateway,
-        '-o', f'parent={parent}',
+    print(f"🛠️ Running: docker network create -d macvlan "
+          f"--subnet {subnet} --gateway {gateway} -o parent={parent} {name}")
+    subprocess.run([
+        "docker", "network", "create", "-d", "macvlan",
+        "--subnet", subnet,
+        "--gateway", gateway,
+        "-o", f"parent={parent}",
         name
-    ]
-    print(f"🛠️ Running: {' '.join(cmd)}")
-    subprocess.check_call(cmd)
+    ], check=True)
+
     print(f"✅ Management network '{name}' created and bound to '{parent}'.")
-    return name
+    return name, parent
+
 
 def ensure_or_select_mgmt_network(topo_file):
-    """Detect or create management macvlan network & auto-update topology.yml if needed."""
+    """
+    Ensures a macvlan network exists, lets the user select or create one,
+    updates topology.yml if needed.
+    Returns (mgmt_net, created) — name of mgmt network and whether we created it.
+    """
     existing = list_existing_macvlan_networks()
-
     if existing:
         print("\n📋 Existing macvlan networks:")
-        for idx, (name, parent) in enumerate(existing, 1):
-            print(f"  {idx}. {name} → {parent}")
-        while True:
-            choice = input("👉 Enter the number of the network to use, or [C]reate a new one: ").strip().lower()
-            if choice == 'c':
-                mgmt_net = create_macvlan_network()
-                break
-            elif choice.isdigit() and (1 <= int(choice) <= len(existing)):
-                mgmt_net = existing[int(choice)-1][0]
-                break
-            else:
-                print("⚠️ Invalid choice. Please enter a valid number or 'C'.")
+        for idx, (name, iface) in enumerate(existing, 1):
+            print(f"  {idx}. {name} → {iface}")
+        choice = input("👉 Enter the number of the network to use, or [C]reate a new one: ").strip().lower()
+        if choice == 'c':
+            mgmt_net, _ = create_macvlan_network()
+            created = True
+        else:
+            idx = int(choice) - 1
+            mgmt_net, _ = existing[idx]
+            created = False
     else:
-        print("⚠️ No macvlan management networks exist. You need to create one.")
-        mgmt_net = create_macvlan_network()
+        print("⚠️ No macvlan networks found. Creating one.")
+        mgmt_net, _ = create_macvlan_network()
+        created = True
 
-    # Load topology.yml
+    # Update topology.yml if needed
     with open(topo_file) as f:
         topo = yaml.safe_load(f)
 
-    current = topo.get('management_network', 'a-135')
-
-    if mgmt_net != current:
+    if topo.get('management_network') != mgmt_net:
         print(f"\n⚠️ Detected mismatch:")
-        print(f"   topology.yml → management_network: {current}")
+        print(f"   topology.yml → management_network: {topo.get('management_network')}")
         print(f"   selected      → {mgmt_net}")
         print(f"✍️  Updating topology.yml with management_network: {mgmt_net}")
         topo['management_network'] = mgmt_net
@@ -102,4 +115,4 @@ def ensure_or_select_mgmt_network(topo_file):
             yaml.dump(topo, f, default_flow_style=False, sort_keys=False)
         print(f"✅ topology.yml updated successfully.")
 
-    return mgmt_net
+    return mgmt_net, created
