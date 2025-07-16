@@ -6,11 +6,11 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
 
 ---
 
-<details>
-<summary>📑 Table of Contents</summary>
+## 📑 Table of Contents
 
 - [🚀 Docker Topology Generator for cEOS](#-docker-topology-generator-for-ceos)
-  - [� Features](#-features)
+  - [📑 Table of Contents](#-table-of-contents)
+  - [📋 Features](#-features)
   - [📂 Directory Structure](#-directory-structure)
   - [🔧 Requirements](#-requirements)
     - [📡 Management Network](#-management-network)
@@ -30,9 +30,6 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
   - [🧰 Enabling Haveged in cEOS](#-enabling-haveged-in-ceos)
   - [🛑 Notes](#-notes)
   - [📚 Extending](#-extending)
-
-</details>
-
 
 ---
 
