@@ -16,6 +16,13 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
   - [📂 Directory Structure](#-directory-structure)
   - [🔧 Requirements](#-requirements)
     - [📡 Management Network](#-management-network)
+  - [⏩ Quick Start](#-quick-start)
+    - [1️⃣ Generate the docker-compose.yml](#1️⃣-generate-the-docker-composeyml)
+    - [2️⃣ Start the Lab and Containers](#2️⃣-start-the-lab-and-containers)
+    - [3️⃣ Fix LLDP](#3️⃣-fix-lldp)
+    - [4️⃣ Change MTU(Optional)](#4️⃣-change-mtuoptional)
+    - [5️⃣ Connect to Containers](#5️⃣-connect-to-containers)
+    - [6️⃣ Terminate the lab and Delete Containers(Skip if you want to keep your container running)](#6️⃣-terminate-the-lab-and-delete-containersskip-if-you-want-to-keep-your-container-running)
   - [📝 Usage](#-usage)
     - [Input Topology File](#input-topology-file)
     - [Command Line Options](#command-line-options)
@@ -123,6 +130,72 @@ If you still prefer to create a macvlan network manually or want to learn more, 
 
 📄 [Setup Management Network](SETUP_MANAGEMENT_NETWORK.md)
 
+
+---
+
+## ⏩ Quick Start
+
+### 1️⃣ Generate the docker-compose.yml  
+
+```bash
+python3 generate-lab.py topology.yml
+```
+
+### 2️⃣ Start the Lab and Containers  
+
+```bash
+root@docker:/home/ceos/repo/ceos-lab_docker# docker-compose up -d
+[+] Building 0.0s (0/0)                                                                                                                                                     docker:default
+[+] Running 4/4
+ ✔ Network ceos-lab_docker_link01      Created                                                                                                                                        0.4s 
+ ✔ Network ceos-lab_docker_link02      Created                                                                                                                                        0.3s 
+ ✔ Container ceos-lab_docker-LEAF1A-1  Started                                                                                                                                        1.6s 
+ ✔ Container ceos-lab_docker-SPINE1-1  Started 
+```
+
+👆From output you can see the prefix name to the devices and networks is **ceos-lab_docker**, this is the name of the lab.
+
+### 3️⃣ Fix LLDP  
+
+The name of the lab is the name of the folder where your docker-compose.yml resides.  
+
+```bash
+root@docker:/home/ceos/repo/ceos-lab_docker# python3 lab-helper.py -f ceos-lab_docker
+docker container: ceos-lab_docker_link01 with bridge_id: br-103bcd231aad
+docker container: ceos-lab_docker_link02 with bridge_id: br-03262d834e0f
+Enabling LLDP on br-103bcd231aad
+Enabling LLDP on br-03262d834e0f
+```
+
+### 4️⃣ Change MTU(Optional)  
+
+```bash
+root@docker:/home/ceos/repo/ceos-lab_docker# python3 lab-helper.py -m 9000 ceos-lab_docker
+docker container: ceos-lab_docker_link01 with bridge_id: br-103bcd231aad
+docker container: ceos-lab_docker_link02 with bridge_id: br-03262d834e0f
+MTU change to 9000 on veth2afd315
+MTU change to 9000 on veth9b09a92
+MTU change to 9000 on veth5fb5277
+MTU change to 9000 on vethf2e3092
+```
+
+### 5️⃣ Connect to Containers
+
+```bash
+python3 connect_to_lab.py
+```
+
+Or if you use tmux you can specify it with argument. 📄 [tmux cheatsheet](tmux-pane-cheatsheet.md)
+
+```bash
+python3 connect_to_lab.py --method tmux
+```
+
+### 6️⃣ Terminate the lab and Delete Containers(Skip if you want to keep your container running)
+
+```bash
+docker-compose down
+```
 
 ---
 
