@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
 
-import os
-import subprocess
-import sys
-import signal
-from shutil import which
-import re
 import argparse
-import threading
-import time
+import os, subprocess, sys, signal, threading, time, re, shutil
+from shutil import which
 
-# ========== SPINNER ==========
+# === COLORS ===
+class Colors:
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
 
+def cprint(text, color=Colors.RESET):
+    print(f"{color}{text}{Colors.RESET}")
+
+def cprint_centered(text, color=Colors.RESET, fill=' '):
+    columns = shutil.get_terminal_size((80, 20)).columns
+    line = text.center(columns, fill)
+    cprint(line, color)
+
+# === SPINNER ===
 def spinner(msg, stop_event):
     symbols = ['⏳', '⌛', '🕒', '🕓', '🕔', '🕕']
     i = 0
@@ -29,117 +40,87 @@ def run_with_spinner(cmd, msg):
     stop_event.set()
     t.join()
 
-# ========== UTILS ==========
+signal.signal(signal.SIGINT, lambda s,f: print("\n⚠️ Use menu to quit. Press 'q'."))
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Manage and connect to your cEOS lab.")
-    parser.add_argument('--method', choices=['tmux', 'iterm', 'gnome-terminal', 'inline'],
-                        help='Preferred connection method (skip menu)')
-    return parser.parse_args()
-
-def detect_methods():
-    methods = []
-    if which('tmux'): methods.append('tmux')
-    if os.environ.get("TERM_PROGRAM") == "iTerm.app": methods.append('iterm')
-    if which('gnome-terminal'): methods.append('gnome-terminal')
-    methods.append('inline')
-    return methods
-
+# === UTILS ===
 def get_project_name():
     return os.path.basename(os.getcwd())
 
 def list_containers(project):
-    result = subprocess.run(
-        ['docker', 'ps', '-a', '--filter', f'name={project}', '--format', '{{.Names}}'],
-        capture_output=True, text=True
-    )
+    result = subprocess.run(['docker', 'ps', '-a', '--filter', f'name={project}', '--format', '{{.Names}}'],
+                            capture_output=True, text=True)
     return result.stdout.strip().splitlines()
 
 def container_is_running(container):
-    result = subprocess.run(
-        ['docker', 'inspect', '-f', '{{.State.Running}}', container],
-        capture_output=True, text=True
-    )
+    result = subprocess.run(['docker', 'inspect', '-f', '{{.State.Running}}', container],
+                            capture_output=True, text=True)
     return result.stdout.strip() == 'true'
 
-# ========== DOCKER ACTIONS WITH SPINNER ==========
+def detect_methods():
+    m = []
+    if which('tmux'): m.append('tmux')
+    m.append('inline')
+    return m
 
-def start_container(container):
-    run_with_spinner(['docker', 'start', container], f"🚀 Starting {container}…")
-    print(f"✅ {container} started.")
-
-def stop_container(container):
-    run_with_spinner(['docker', 'stop', container], f"🛑 Stopping {container}…")
-    print(f"✅ {container} stopped.")
-
-def restart_container(container):
-    run_with_spinner(['docker', 'restart', container], f"🔄 Restarting {container}…")
-    print(f"✅ {container} restarted.")
-
-# ========== MENU ==========
-
-def main_menu():
-    while True:
-        print("\n📋 What would you like to do?")
-        print("  1. 🚀 Start lab (docker-compose up -d)")
-        print("  2. 🔗 Connect to containers")
-        print("  3. 🛑 Stop lab (docker-compose down)")
-        print("  4. 🔄 Lab control panel (restart/shutdown containers)")
-        print("  5. 📊 Lab status")
-        print("  q. ❌ Quit")
-        choice = input("👉 Your choice: ").strip().lower()
-
-        if choice == '1':
-            start_lab()
-        elif choice == '2':
-            connect_to_lab()
-        elif choice == '3':
-            stop_lab()
-        elif choice == '4':
-            lab_control_panel()
-        elif choice == '5':
-            lab_status()
-        elif choice == 'q':
-            print("👋 Goodbye!")
-            sys.exit(0)
-        else:
-            print("⚠️ Invalid choice.")
-
+# === DOCKER ACTIONS ===
 def start_lab():
     if not os.path.exists('docker-compose.yml'):
-        print("❌ docker-compose.yml not found!")
+        cprint("\n❌ docker-compose.yml not found!",Colors.RED)
         return
     project = get_project_name()
     running = [c for c in list_containers(project) if container_is_running(c)]
     if running:
-        print("\n" + "═" * 60)
-        print(f"✅ Lab already running with {len(running)} container(s):")
+        cprint_centered("✅ Lab is already running!", Colors.GREEN, fill='-')
         for c in running:
             print(f"   🔷 {c}")
-        print("═" * 60)
+        print("ℹ️ Use the menu to connect or stop the lab.")
         return
-    print("🚀 Starting lab…")
     run_with_spinner(['docker-compose', 'up', '-d'], "🚀 Starting lab…")
-    print("✅ Lab started.")
+    cprint("✅ Lab started.", Colors.GREEN)
 
 def stop_lab():
     if not os.path.exists('docker-compose.yml'):
         print("❌ docker-compose.yml not found!")
         return
-    project = get_project_name()
-    running = [c for c in list_containers(project) if container_is_running(c)]
+    running = [c for c in list_containers(get_project_name()) if container_is_running(c)]
     if not running:
-        print("ℹ️ Lab is not currently running.")
+        cprint_centered("🛑 Lab is already stopped", Colors.YELLOW, fill='-')
+        print("👉 You can start the lab from the main menu if you want to bring it up.\n")
         return
-    print("🛑 Stopping lab…")
     run_with_spinner(['docker-compose', 'down'], "🛑 Stopping lab…")
-    print("✅ Lab stopped.")
+    cprint("✅ Lab stopped.", Colors.GREEN)
 
+def restart_container(container):
+    run_with_spinner(['docker', 'restart', container], f"🔄 Restarting {container}…")
+    cprint(f"✅ {container} restarted.", Colors.GREEN)
+
+def start_container(container):
+    run_with_spinner(['docker', 'start', container], f"🚀 Starting {container}…")
+    cprint(f"✅ {container} started.", Colors.GREEN)
+
+def stop_container(container):
+    run_with_spinner(['docker', 'stop', container], f"🛑 Stopping {container}…")
+    cprint(f"✅ {container} stopped.", Colors.GREEN)
+
+# === STATUS ===
+def lab_status():
+    project = get_project_name()
+    containers = list_containers(project)
+    if not containers:
+        cprint("\nℹ️ No containers found.", Colors.BOLD)
+        return
+    cprint_centered(f"🧩 Lab Name: {project}", Colors.YELLOW, fill='-')
+    print("📊 Lab Status:")
+    for c in containers:
+        status = "🟢 running" if container_is_running(c) else "🔴 stopped"
+        print(f"  {c} — {status}")
+
+# === CONTROL PANEL ===
 def lab_control_panel():
     project = get_project_name()
     containers = list_containers(project)
     if not containers:
-        print("ℹ️ No containers to control.")
+        cprint("\nℹ️ No containers to control.", Colors.BOLD)
         return
     while True:
         print("\n📋 Containers:")
@@ -155,75 +136,47 @@ def lab_control_panel():
             for c in containers:
                 restart_container(c)
         elif choice.isdigit() and 1 <= int(choice) <= len(containers):
-            container_action(containers[int(choice)-1], detect_methods()[0], project)
+            container_action(containers[int(choice)-1])
         else:
-            print("⚠️ Invalid choice.")
+            cprint("\n⚠️ Invalid choice", Colors.YELLOW)
 
-def lab_status():
-    project = get_project_name()
-    containers = list_containers(project)
-    if not containers:
-        print("ℹ️ No containers found.")
-        return
-    print("\n📊 Lab Status:")
-    for c in containers:
-        if container_is_running(c):
-            print(f"  🟢 {c}")
-        else:
-            print(f"  🔴 {c}")
-
-def container_action(container, method, project):
-    while True:
-        is_running = container_is_running(container)
-        print(f"\n📋 What do you want to do with {container}?")
-        if is_running:
-            print("  1. 🔗 Connect")
-            print("  2. 🔄 Restart")
-            print("  3. 🛑 Stop")
-        else:
-            print("  1. 🔗 Connect (unavailable — stopped)")
-            print("  2. 🔄 Restart")
-            print("  3. 🚀 Start")
-        print("  q. Back")
-        choice = input("👉 Your choice: ").strip().lower()
-        if choice == '1':
-            if not is_running:
-                print("⚠️ Cannot connect — container is stopped.")
-            else:
-                connect(container, method, project)
-        elif choice == '2':
-            restart_container(container)
-        elif choice == '3':
-            if is_running:
-                stop_container(container)
-            else:
-                start_container(container)
-        elif choice == 'q':
-            return
-        else:
-            print("⚠️ Invalid choice.")
-
-def connect_to_lab():
+# === CONNECT ===
+def connect_to_lab(method=None):
     project = get_project_name()
     methods = detect_methods()
-
-    # ✅ FIX: already inside tmux? just proceed
-    if 'TMUX' in os.environ:
-        method = 'tmux'
-    else:
+    if method is None:
         method = choose_method(methods)
         if not method:
             return
-
-        if method == 'tmux':
-            start_tmux_session(project)
-            return  # relaunches itself in tmux
-
+    if method == 'tmux' and 'TMUX' not in os.environ:
+        start_tmux_session(project)
+        return
     if method == 'tmux':
-        enable_tmux_mouse()
         show_tmux_cheat_sheet()
-
     container_menu(method, project)
+
+def choose_method(methods):
+    print("\n📋 Choose terminal method:")
+    for idx, m in enumerate(methods, 1):
+        print(f"  {idx}. {m}")
+    print("  q. Back")
+    while True:
+        choice = input("👉 Your choice [number or 'q']: ").strip().lower()
+        if choice == 'q':
+            return None
+        elif choice.isdigit() and 1 <= int(choice) <= len(methods):
+            return methods[int(choice)-1]
+        print("⚠️ Invalid choice.")
+
+def start_tmux_session(project):
+    result = subprocess.run(['tmux', 'ls'], capture_output=True, text=True)
+    if project in result.stdout:
+        subprocess.run(['tmux', 'attach-session', '-t', project])
+    else:
+        subprocess.Popen([
+            'tmux', 'new-session', '-s', project,
+            f'python3 {sys.argv[0]} --method tmux --action connect'
+        ]).wait()
 
 def container_menu(method, project):
     while True:
@@ -239,45 +192,49 @@ def container_menu(method, project):
         print("  q. Back")
         choice = input("👉 Enter number, 'a' or 'q': ").strip().lower()
         if choice == 'q':
-            if method == 'tmux' and 'TMUX' in os.environ:
-                subprocess.run(['tmux', 'kill-session', '-t', project])
             return
         elif choice == 'a':
             for c in containers:
                 connect(c, method, project)
         elif choice.isdigit() and 1 <= int(choice) <= len(containers):
-            container_action(containers[int(choice)-1], method, project)
+            container_action(containers[int(choice)-1])
         else:
-            print("⚠️ Invalid choice.")
+            cprint("\n⚠️ Invalid choice", Colors.YELLOW)
 
-def start_tmux_session(project):
-    result = subprocess.run(['tmux', 'ls'], capture_output=True, text=True)
-    if project in result.stdout:
-        subprocess.run(['tmux', 'attach-session', '-t', project])
-    else:
-        subprocess.Popen([
-            'tmux', 'new-session', '-s', project,
-            f'python3 {sys.argv[0]} --method tmux'
-        ]).wait()
-
-def choose_method(methods):
-    print("\n📋 Choose terminal method:")
-    for idx, m in enumerate(methods, 1):
-        print(f"  {idx}. {m}")
-    print("  q. Back")
+def container_action(container):
     while True:
-        choice = input("👉 Your choice [number or 'q']: ").strip().lower()
-        if choice == 'q':
-            return None
-        elif choice.isdigit() and 1 <= int(choice) <= len(methods):
-            return methods[int(choice)-1]
-        print("⚠️ Invalid choice.")
+        is_running = container_is_running(container)
+        print(f"\n📋 Actions for {container}:")
+        if is_running:
+            print("  1. 🔗 Connect")
+            print("  2. 🔄 Restart")
+            print("  3. 🛑 Stop")
+        else:
+            print("  1. 🔗 Connect (unavailable — stopped)")
+            print("  2. 🔄 Restart")
+            print("  3. 🚀 Start")
+        print("  q. Back")
+        choice = input("👉 Your choice: ").strip().lower()
+        if choice == '1' and is_running:
+            connect(container, 'inline', get_project_name())
+        elif choice == '2':
+            restart_container(container)
+        elif choice == '3':
+            if is_running:
+                stop_container(container)
+            else:
+                start_container(container)
+        elif choice == 'q':
+            return
+        else:
+            cprint("\n⚠️ Invalid choice", Colors.YELLOW)
 
-def enable_tmux_mouse():
-    conf = os.path.expanduser("~/.tmux.conf")
-    with open(conf, "a") as f:
-        f.write("\nset -g mouse on\n")
-    subprocess.run(['tmux', 'source-file', conf])
+def connect(container, method, project):
+    if method == 'tmux':
+        subprocess.Popen(['tmux', 'split-window', '-v', f"docker exec -it {container} Cli"])
+        subprocess.Popen(['tmux', 'select-layout', 'tiled'])
+    else:
+        subprocess.run(['docker', 'exec', '-it', container, 'Cli'])
 
 def show_tmux_cheat_sheet():
     sheet = "\n🎹 Tmux Cheat Sheet\n" + "-"*30 + """
@@ -291,30 +248,40 @@ def show_tmux_cheat_sheet():
 """
     print(sheet)
     with open("tmux-cheatsheet.txt", "w") as f:
-        f.write(strip_ansi(sheet))
+        f.write(re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', sheet))
     print("📄 Cheat sheet saved to tmux-cheatsheet.txt")
 
-def strip_ansi(text):
-    return re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', text)
-
-def connect(container, method, project):
-    if method == 'tmux':
-        subprocess.Popen(['tmux', 'split-window', '-v', f"docker exec -it {container} Cli"])
-        subprocess.Popen(['tmux', 'select-layout', 'tiled'])
-    elif method == 'iterm':
-        subprocess.Popen(['osascript', '-e', f'tell app "iTerm" to create window with default profile and write text \"docker exec -it {container} Cli\"'])
-    elif method == 'gnome-terminal':
-        subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f"docker exec -it {container} Cli; exec bash"])
-    else:
-        subprocess.run(['docker', 'exec', '-it', container, 'Cli'])
-
-def handle_sigint(sig, frame):
-    print("\n⚠️ Use menu to quit. Press 'q'.")
-
+# === MAIN ===
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, handle_sigint)
-    args = parse_args()
-    if args.method:
-        connect_to_lab()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--method', choices=['tmux', 'inline'])
+    parser.add_argument('--action', choices=['connect'])
+    args = parser.parse_args()
+
+    if args.action == 'connect' and args.method == 'tmux':
+        connect_to_lab(method='tmux')
     else:
-        main_menu()
+        while True:
+            print("\n📋 What would you like to do?")
+            print("  1. 🚀 Start lab (docker-compose up -d)")
+            print("  2. 🔗 Connect to containers")
+            print("  3. 🛑 Stop lab (docker-compose down)")
+            print("  4. 🔄 Lab control panel (restart/shutdown containers)")
+            print("  5. 📊 Lab status")
+            print("  q. ❌ Quit")
+            choice = input("👉 Your choice: ").strip().lower()
+            if choice == '1':
+                start_lab()
+            elif choice == '2':
+                connect_to_lab()
+            elif choice == '3':
+                stop_lab()
+            elif choice == '4':
+                lab_control_panel()
+            elif choice == '5':
+                lab_status()
+            elif choice == 'q':
+                cprint("👋 Goodbye!", Colors.CYAN)
+                sys.exit(0)
+            else:
+                cprint("\n⚠️ Invalid choice", Colors.YELLOW)

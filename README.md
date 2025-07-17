@@ -16,13 +16,17 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
   - [📂 Directory Structure](#-directory-structure)
   - [🔧 Requirements](#-requirements)
     - [📡 Management Network](#-management-network)
-  - [⏩ Quick Start](#-quick-start)
-    - [1️⃣ Generate the docker-compose.yml](#1️⃣-generate-the-docker-composeyml)
-    - [2️⃣ Start the Lab and Containers](#2️⃣-start-the-lab-and-containers)
-    - [3️⃣ Fix LLDP](#3️⃣-fix-lldp)
-    - [4️⃣ Change MTU(Optional)](#4️⃣-change-mtuoptional)
-    - [5️⃣ Connect to Containers](#5️⃣-connect-to-containers)
-    - [6️⃣ Terminate the lab and Delete Containers(Skip if you want to keep your container running)](#6️⃣-terminate-the-lab-and-delete-containersskip-if-you-want-to-keep-your-container-running)
+  - [⏩ Quick Start Manual](#-quick-start-manual)
+    - [Interactive](#interactive)
+      - [1️⃣ Generate the docker-compose.yml](#1️⃣-generate-the-docker-composeyml)
+      - [2️⃣ Interactive Mode](#2️⃣-interactive-mode)
+    - [Manual](#manual)
+      - [1️⃣ Generate the docker-compose.yml](#1️⃣-generate-the-docker-composeyml-1)
+      - [2️⃣ Start the Lab and Containers](#2️⃣-start-the-lab-and-containers)
+      - [3️⃣ Fix LLDP](#3️⃣-fix-lldp)
+      - [4️⃣ Change MTU(Optional)](#4️⃣-change-mtuoptional)
+      - [5️⃣ Connect to Containers](#5️⃣-connect-to-containers)
+      - [6️⃣ Terminate the lab and Delete Containers(Skip if you want to keep your container running)](#6️⃣-terminate-the-lab-and-delete-containersskip-if-you-want-to-keep-your-container-running)
   - [📝 Usage](#-usage)
     - [Input Topology File](#input-topology-file)
     - [Command Line Options](#command-line-options)
@@ -133,18 +137,34 @@ If you still prefer to create a macvlan network manually or want to learn more, 
 
 ---
 
-## ⏩ Quick Start
+## ⏩ Quick Start Manual
 
-### 1️⃣ Generate the docker-compose.yml  
+### Interactive
+
+#### 1️⃣ Generate the docker-compose.yml  
 
 ```bash
 python3 generate-lab.py topology.yml
 ```
 
-### 2️⃣ Start the Lab and Containers  
+#### 2️⃣ Interactive Mode  
 
 ```bash
-root@docker:/home/ceos/repo/ceos-lab_docker# docker-compose up -d
+python3 start-lab.py
+```
+
+### Manual
+
+#### 1️⃣ Generate the docker-compose.yml  
+
+```bash
+python3 generate-lab.py topology.yml
+```
+
+#### 2️⃣ Start the Lab and Containers  
+
+```bash
+docker-compose up -d
 [+] Building 0.0s (0/0)                                                                                                                                                     docker:default
 [+] Running 4/4
  ✔ Network ceos-lab_docker_link01      Created                                                                                                                                        0.4s 
@@ -155,7 +175,7 @@ root@docker:/home/ceos/repo/ceos-lab_docker# docker-compose up -d
 
 👆From output you can see the prefix name to the devices and networks is **ceos-lab_docker**, this is the name of the lab.
 
-### 3️⃣ Fix LLDP  
+#### 3️⃣ Fix LLDP  
 
 The name of the lab is the name of the folder where your docker-compose.yml resides.  
 
@@ -167,10 +187,10 @@ Enabling LLDP on br-103bcd231aad
 Enabling LLDP on br-03262d834e0f
 ```
 
-### 4️⃣ Change MTU(Optional)  
+#### 4️⃣ Change MTU(Optional)  
 
 ```bash
-root@docker:/home/ceos/repo/ceos-lab_docker# python3 lab-helper.py -m 9000 ceos-lab_docker
+root@docker:/home/ceos-lab_docker# python3 lab-helper.py -m 9000 ceos-lab_docker
 docker container: ceos-lab_docker_link01 with bridge_id: br-103bcd231aad
 docker container: ceos-lab_docker_link02 with bridge_id: br-03262d834e0f
 MTU change to 9000 on veth2afd315
@@ -179,7 +199,7 @@ MTU change to 9000 on veth5fb5277
 MTU change to 9000 on vethf2e3092
 ```
 
-### 5️⃣ Connect to Containers
+#### 5️⃣ Connect to Containers
 
 ```bash
 python3 connect_to_lab.py
@@ -191,7 +211,7 @@ Or if you use tmux you can specify it with argument. 📄 [tmux cheatsheet](tmux
 python3 connect_to_lab.py --method tmux
 ```
 
-### 6️⃣ Terminate the lab and Delete Containers(Skip if you want to keep your container running)
+#### 6️⃣ Terminate the lab and Delete Containers(Skip if you want to keep your container running)
 
 ```bash
 docker-compose down
@@ -326,7 +346,7 @@ From the directory or folder of project where the `docker-compose.yml` file resi
 ```bash
 docker-compose up -d
 
-root@docker:/home/ceos/repo/ceos-lab_docker# docker-compose up -d
+root@docker:/home/ceos-lab_docker# docker-compose up -d
 [+] Building 0.0s (0/0)                                                                              docker:default
 [+] Running 4/4
  ✔ Network ceos-lab_docker_link01      Created                                                                 0.3s
@@ -409,7 +429,7 @@ optional arguments:
 ### Change the MTU
 
 ```bash
-root@docker:/home/ceos/repo/ceos-lab_docker# python3 lab-helper.py -m 9000 ceos-lab_docker
+root@docker:/home/ceos-lab_docker# python3 lab-helper.py -m 9000 ceos-lab_docker
 docker container: ceos-lab_docker_link01 with bridge_id: br-392c27666e71
 docker container: ceos-lab_docker_link02 with bridge_id: br-abf4379ebc48
 MTU change to 9000 on veth921a13e
@@ -421,7 +441,7 @@ MTU change to 9000 on vethcb3b52e
 ### Allow LLDP
 
 ```bash
-root@docker:/home/ceos/repo/ceos-lab_docker# python3 lab-helper.py -f ceos-lab_docker
+root@docker:/home/ceos-lab_docker# python3 lab-helper.py -f ceos-lab_docker
 docker container: ceos-lab_docker_link01 with bridge_id: br-392c27666e71
 docker container: ceos-lab_docker_link02 with bridge_id: br-abf4379ebc48
 Enabling LLDP on br-392c27666e71
