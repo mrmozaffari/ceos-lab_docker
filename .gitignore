@@ -2,3 +2,4 @@ docker-compose.yml
 /devices
 tokens
 /__pycache__
+*.bak
