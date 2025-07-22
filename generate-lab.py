@@ -57,7 +57,10 @@ def get_existing_docker_subnets():
     existing_subnets = set()
     for net_id in output:
         info = json.loads(subprocess.check_output(['docker', 'network', 'inspect', net_id]).decode())[0]
-        for cfg in info.get('IPAM', {}).get('Config', []):
+        ipam = info.get('IPAM')
+        if not ipam or not ipam.get('Config'):
+            continue
+        for cfg in ipam['Config']:
             if 'Subnet' in cfg:
                 existing_subnets.add(ipaddress.ip_network(cfg['Subnet']))
     return existing_subnets
