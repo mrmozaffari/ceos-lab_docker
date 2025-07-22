@@ -5,6 +5,14 @@ import yaml
 import os
 
 
+def is_podman():
+    try:
+        out = subprocess.check_output(["docker", "--version"], stderr=subprocess.STDOUT).decode()
+        return "podman" in out.lower()
+    except Exception:
+        return False
+
+
 def list_physical_interfaces():
     return [
         iface for iface in os.listdir('/sys/class/net')
@@ -28,21 +36,32 @@ def create_macvlan_network(dry_run=False, parent=None):
     print(f"   Subnet: {subnet}")
     print(f"   Gateway: {gateway}")
     print(f"   Parent interface: {parent}")
-    mode = input("👉 Choose mode [private/public] (default: public): ").strip().lower()
-    if mode not in ('private', 'public'):
-        mode = 'public'
+    mode = input("👉 Choose mode [bridge/private/vepa/passthru] (default: bridge): ").strip().lower()
+    if mode not in ('bridge', 'private', 'vepa', 'passthru'):
+        mode = 'bridge'
 
     if dry_run:
         print(f"📝 Dry-run: would create macvlan network '{name}' on '{parent}' with {subnet}, gateway {gateway}, mode {mode}")
         return name, mode, True
 
-    args = [
-        "docker", "network", "create", "-d", "macvlan",
-        "--subnet", subnet, "--gateway", gateway,
-        "-o", f"parent={parent}",
-        "-o", f"macvlan_mode={mode}",
-        name
-    ]
+    if is_podman():
+        args = [
+            "podman", "network", "create",
+            "--driver", "macvlan",
+            "--subnet", subnet,
+            "--gateway", gateway,
+            "--interface", parent,
+            "--mode", mode,
+            name
+        ]
+    else:
+        args = [
+            "docker", "network", "create", "-d", "macvlan",
+            "--subnet", subnet, "--gateway", gateway,
+            "-o", f"parent={parent}",
+            "-o", f"macvlan_mode={mode}",
+            name
+        ]
 
     subprocess.run(args, check=True)
     print(f"✅ Created macvlan network '{name}' on '{parent}' in mode '{mode}'")

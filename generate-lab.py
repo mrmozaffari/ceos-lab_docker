@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument('--auto', action='store_true', help='Run in non-interactive mode with defaults')
     parser.add_argument('--dry-run', action='store_true', help='Validate everything but don’t create files or networks')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging to generate-lab.log')
+    parser.add_argument('--parent', help='Specify parent interface explicitly (e.g., eth0)')
     return parser.parse_args()
 
 
@@ -115,7 +116,6 @@ def generate_device_files(devices, connections, dry_run):
             'ceos_config': os.path.abspath(os.path.join(device_dir, 'ceos-config')),
             'eos_mapping': os.path.abspath(os.path.join(device_dir, 'EosIntfMapping.json'))
         }
-
 
     return volume_paths
 
@@ -208,7 +208,7 @@ def main():
     base_subnet = ipaddress.ip_network(topo.get('subnet_pool', str(DEFAULT_SUBNET_POOL)))
     connections = topo['connections']
 
-    mgmt_net, _ = ensure_or_select_mgmt_network(args.topology, auto=args.auto, dry_run=args.dry_run)
+    mgmt_net, _ = ensure_or_select_mgmt_network(args.topology, auto=args.auto, dry_run=args.dry_run, parent=args.parent)
 
     existing_docker_subnets = get_existing_docker_subnets()
     devices = {}
