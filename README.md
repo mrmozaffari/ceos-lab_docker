@@ -12,6 +12,7 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
   - [Requirements](#requirements)
   - [🛑 Before you Begin](#-before-you-begin)
     - [📝 Available Options](#-available-options)
+  - [Docker Installation/Downgrade](#docker-installationdowngrade)
   - [📋 Features](#-features)
   - [📂 Directory Structure](#-directory-structure)
   - [🔧 Requirements](#-requirements)
@@ -63,6 +64,13 @@ It’s important to run this lab on a host that already supports LLDP and LACP. 
 - Use a Linux with custom kernel to allow LLDP, LACP (Advanced)
 - Use available Linux version used for iOU, EVE-NG, Container-Lab
 - Download the Kernel included in this Repo - You can find it in the main folder - 📄 [Kernel Installation Instructions](KERNEL_INSTALLATION.md)
+
+---
+
+## Docker Installation/Downgrade
+
+⚠️ **Important:**
+Downgrade/Install Docker on Ubuntu [Kernel Installation Instructions](KERNEL_INSTALLATION.md)
 
 ---
 
