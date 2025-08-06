@@ -28,7 +28,7 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
       - [5️⃣ Connect to Containers](#5️⃣-connect-to-containers)
       - [6️⃣ Terminate the lab](#6️⃣-terminate-the-lab)
   - [📝 Usage](#-usage)
-    - [Input Topology File](#input-topology-file)
+    - [Topology File Example](#topology-file-example)
     - [Command Line Options](#command-line-options)
   - [📦 Example Output](#-example-output)
   - [📄 Key Files Generated](#-key-files-generated)
@@ -48,7 +48,7 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
 
 - Virtual machine or Bare metal with 24G memory
 - Ubuntu LTS
-- Docker a and Docker Compose
+- Docker 24.0.6 a and Docker Compose 2.22.0
 - One of the cEOS container image, you can download from Arista website
 - Some Linux Knowledge
 
@@ -205,7 +205,7 @@ docker-compose down
 
 ## 📝 Usage
 
-### Input Topology File
+### Topology File Example
 
 ```yaml
 management_network: a-135
