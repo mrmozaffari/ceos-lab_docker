@@ -29,7 +29,15 @@ def create_macvlan_network(dry_run=False, parent=None):
         interfaces = list_physical_interfaces()
         if not interfaces:
             raise RuntimeError("❌ No usable interfaces found. Please specify one with --parent.")
-        parent = interfaces[0]
+        # let the user pick instead of auto-selecting first
+        print("\n📡 Available physical interfaces:")
+        for idx, iface in enumerate(interfaces, 1):
+            print(f"  {idx}. {iface}")
+        choice = input("👉 Choose parent interface [number]: ").strip()
+        try:
+            parent = interfaces[int(choice) - 1]
+        except (ValueError, IndexError):
+            raise RuntimeError("❌ Invalid choice for parent interface.")
 
     print(f"\n⚙️  Creating a new macvlan network:")
     print(f"   Name: {name}")
