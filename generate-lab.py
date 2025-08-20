@@ -9,11 +9,19 @@ import hashlib
 import subprocess
 import json
 import logging
+import signal
 from collections import defaultdict
 from mgmt_network import ensure_or_select_mgmt_network
 
 
 DEFAULT_SUBNET_POOL = ipaddress.ip_network('172.16.0.0/16')
+
+# --- Handle Ctrl+C globally ---
+def handle_sigint(sig, frame):
+    print("\nOperation cancelled by user (Ctrl+C). exiting gracefully...")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, handle_sigint)
 
 
 def parse_args():
@@ -242,3 +250,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

@@ -16,7 +16,7 @@ def is_podman():
 def list_physical_interfaces():
     return [
         iface for iface in os.listdir('/sys/class/net')
-        if iface != 'lo' and not iface.startswith('docker') and not iface.startswith('br-')
+        if iface != 'lo' and not iface.startswith('docker') and not iface.startswith('br-') and not iface.startswith('ve') and not iface.startswith('vi')
     ]
 
 
