@@ -8,8 +8,8 @@ This guide installs kernel **5.4.164** on an Ubuntu VM. Do this **before** the D
 
 ## 0. Prerequisites
 
-- **Secure Boot must be off.** The 5.4.164 kernel is not signed, so a UEFI VM with Secure Boot enabled will refuse to boot it. Check the VM's boot settings in Prism before you start.
-- **Console access.** Make sure you can open the VM console in Prism. If the network breaks after the reboot, the console is how you recover.
+- **Secure Boot must be off.** The 5.4.164 kernel is not signed, so a UEFI VM with Secure Boot enabled will refuse to boot it. Check the VM's firmware and boot settings in your hypervisor or cloud platform before you start.
+- **Console access.** Make sure you have console access to the VM (the hypervisor console, a serial console, or a cloud provider's console). If the network breaks after the reboot, the console is how you recover.
 - **Make the GRUB menu reachable.** Ubuntu cloud images often hide the GRUB menu, so you cannot pick the old kernel at boot. Check the current settings:
 
 ```bash
@@ -202,7 +202,7 @@ You should see your network interface with its IP address and your disks. If the
 The `GRUB_DEFAULT` text does not match the menu entry. Compare it character by character with the output of Step 4, run `sudo update-grub`, and reboot.
 
 **The new kernel does not boot**
-Open the VM console in Prism. At boot, hold `Shift` (BIOS) or press `Esc` (UEFI) to open the GRUB menu, choose `Advanced options for Ubuntu`, and pick the previous kernel. If the menu does not appear, see Step 0 (GRUB menu timeout). Also check that Secure Boot is off. Once logged in, restore the backup (`sudo cp /etc/default/grub.bak /etc/default/grub`) or set `GRUB_DEFAULT=0`, run `sudo update-grub`, and check that all five files from Step 1 were copied correctly.
+Open the VM console (hypervisor, serial or cloud console). At boot, hold `Shift` (BIOS) or press `Esc` (UEFI) to open the GRUB menu, choose `Advanced options for Ubuntu`, and pick the previous kernel. If the menu does not appear, see Step 0 (GRUB menu timeout). Also check that Secure Boot is off. Once logged in, restore the backup (`sudo cp /etc/default/grub.bak /etc/default/grub`) or set `GRUB_DEFAULT=0`, run `sudo update-grub`, and check that all five files from Step 1 were copied correctly.
 
 **`update-grub` does not list 5.4.164**
 The files in `/boot` are missing or misnamed. Re-run Step 2 and check with `ls /boot | grep 5.4.164`.
