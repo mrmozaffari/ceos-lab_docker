@@ -93,7 +93,7 @@ def ensure_or_select_mgmt_network(topo_file, auto=False, dry_run=False, parent=N
             mgmt_net, mode, created = create_macvlan_network(dry_run, parent)
 
         if mode != 'private':
-            print(f"⚠️ WARNING: public mode. LLDP/broadcast frames may reach your mgmt network.")
+            print(f"⚠️ FYI: public mode. LLDP/broadcast frames may reach your mgmt network. Script disables the LLDP on MA1 interface")
             if input("❓ Continue anyway? [y/N]: ").strip().lower() != 'y':
                 continue
 

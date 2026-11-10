@@ -9,19 +9,24 @@ import hashlib
 import subprocess
 import json
 import logging
-import signal
 from collections import defaultdict
 from mgmt_network import ensure_or_select_mgmt_network
 
 
 DEFAULT_SUBNET_POOL = ipaddress.ip_network('172.16.0.0/16')
 
-# --- Handle Ctrl+C globally ---
-def handle_sigint(sig, frame):
-    print("\nOperation cancelled by user (Ctrl+C). exiting gracefully...")
-    sys.exit(0)
-
-signal.signal(signal.SIGINT, handle_sigint)
+# Written to devices/<device>/startup-config for every device
+STARTUP_CONFIG = (
+    "event-handler ENABLE-ENTROPY\n"
+    "   trigger on-boot\n"
+    "   action bash bash /mnt/flash/enable_entropy.sh\n"
+    "   delay 30\n"
+    "   asynchronous\n"
+    "!\n"
+    "interface Management1\n"
+    "   no lldp transmit\n"
+    "   no lldp receive\n"
+)
 
 
 def parse_args():
@@ -112,6 +117,9 @@ def generate_device_files(devices, connections, dry_run):
             f.write(f"SYSTEMMACADDR={mac_from_name(device)}\n")
             f.write("TFA_VERSION=2\n")
 
+        with open(os.path.join(device_dir, 'startup-config'), 'w') as f:
+            f.write(STARTUP_CONFIG)
+
         mapping = {
             "ManagementIntf": {"eth0": "Management1"},
             "EthernetIntf": {f"eth{i+1}": iface for i, iface in enumerate(intfs)}
@@ -122,7 +130,8 @@ def generate_device_files(devices, connections, dry_run):
 
         volume_paths[device] = {
             'ceos_config': os.path.abspath(os.path.join(device_dir, 'ceos-config')),
-            'eos_mapping': os.path.abspath(os.path.join(device_dir, 'EosIntfMapping.json'))
+            'eos_mapping': os.path.abspath(os.path.join(device_dir, 'EosIntfMapping.json')),
+            'startup_config': os.path.abspath(os.path.join(device_dir, 'startup-config'))
         }
 
     return volume_paths
@@ -176,6 +185,7 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run
             'volumes': [
                 {'type': 'bind', 'source': paths.get("ceos_config", ""), 'target': '/mnt/flash/ceos-config', 'read_only': True},
                 {'type': 'bind', 'source': paths.get("eos_mapping", ""), 'target': '/mnt/flash/EosIntfMapping.json', 'read_only': True},
+                {'type': 'bind', 'source': paths.get("startup_config", ""), 'target': '/mnt/flash/startup-config'},
                 {'type': 'bind', 'source': os.path.abspath("setup_entropy.sh"), 'target': '/mnt/flash/setup_entropy.sh', 'read_only': True},
                 {'type': 'bind', 'source': os.path.abspath("enable_entropy.sh"), 'target': '/mnt/flash/enable_entropy.sh', 'read_only': True},
             ],
@@ -250,5 +260,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
