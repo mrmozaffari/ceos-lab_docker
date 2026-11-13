@@ -9,6 +9,7 @@ import hashlib
 import subprocess
 import json
 import logging
+import shutil
 from collections import defaultdict
 from mgmt_network import ensure_or_select_mgmt_network
 
@@ -20,7 +21,7 @@ STARTUP_CONFIG = (
     "event-handler ENABLE-ENTROPY\n"
     "   trigger on-boot\n"
     "   action bash bash /mnt/flash/enable_entropy.sh\n"
-    "   delay 30\n"
+    "   delay 90\n"
     "   asynchronous\n"
     "!\n"
     "interface Management1\n"
@@ -43,6 +44,9 @@ def parse_args():
     parser.add_argument('--dry-run', action='store_true', help='Validate everything but don’t create files or networks')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging to generate-lab.log')
     parser.add_argument('--parent', help='Specify parent interface explicitly (e.g., eth0)')
+    parser.add_argument('--reset-startup', action='store_true',
+                        help='Overwrite existing devices/<dev>/flash/startup-config with the generated default '
+                             '(default: keep saved configs)')
     return parser.parse_args()
 
 
@@ -94,7 +98,29 @@ def mac_from_name(name):
     return f'02:{h[0:2]}:{h[2:4]}:{h[4:6]}:{h[6:8]}:{h[8:10]}'
 
 
-def generate_device_files(devices, connections, dry_run):
+ENTROPY_SCRIPTS = ('setup_entropy.sh', 'enable_entropy.sh')
+
+
+def seed_startup_config(device, device_dir, flash_dir, reset):
+    """Create flash/startup-config without ever overwriting a saved config."""
+    target = os.path.join(flash_dir, 'startup-config')
+    legacy = os.path.join(device_dir, 'startup-config')  # old single-file mount location
+
+    if os.path.isfile(target) and not reset:
+        print(f"  {device}: keeping existing flash/startup-config")
+        return
+    if os.path.isfile(target) and reset:
+        shutil.copy2(target, target + '.bak')
+    if os.path.isfile(legacy) and not reset:
+        shutil.copy2(legacy, target)  # migrate, legacy file is left in place as a backup
+        print(f"  {device}: migrated legacy startup-config into flash/")
+        return
+    with open(target, 'w') as f:
+        f.write(STARTUP_CONFIG)
+
+
+def generate_device_files(devices, connections, dry_run, reset_startup=False):
+    """Build devices/<device>/flash/, which is bind-mounted as a whole onto /mnt/flash."""
     volume_paths = {}
     interface_mapping_per_device = defaultdict(list)
 
@@ -110,29 +136,30 @@ def generate_device_files(devices, connections, dry_run):
 
     for device, intfs in interface_mapping_per_device.items():
         device_dir = os.path.join('devices', device)
-        os.makedirs(device_dir, exist_ok=True)
+        flash_dir = os.path.join(device_dir, 'flash')
+        os.makedirs(flash_dir, exist_ok=True)
 
-        with open(os.path.join(device_dir, 'ceos-config'), 'w') as f:
+        with open(os.path.join(flash_dir, 'ceos-config'), 'w') as f:
             f.write(f"SERIALNUMBER={device.upper()}-SN\n")
             f.write(f"SYSTEMMACADDR={mac_from_name(device)}\n")
             f.write("TFA_VERSION=2\n")
-
-        with open(os.path.join(device_dir, 'startup-config'), 'w') as f:
-            f.write(STARTUP_CONFIG)
 
         mapping = {
             "ManagementIntf": {"eth0": "Management1"},
             "EthernetIntf": {f"eth{i+1}": iface for i, iface in enumerate(intfs)}
         }
-
-        with open(os.path.join(device_dir, 'EosIntfMapping.json'), 'w') as f:
+        with open(os.path.join(flash_dir, 'EosIntfMapping.json'), 'w') as f:
             json.dump(mapping, f, indent=2)
 
-        volume_paths[device] = {
-            'ceos_config': os.path.abspath(os.path.join(device_dir, 'ceos-config')),
-            'eos_mapping': os.path.abspath(os.path.join(device_dir, 'EosIntfMapping.json')),
-            'startup_config': os.path.abspath(os.path.join(device_dir, 'startup-config'))
-        }
+        seed_startup_config(device, device_dir, flash_dir, reset_startup)
+
+        for name in ENTROPY_SCRIPTS:
+            if os.path.isfile(name):
+                shutil.copy2(name, os.path.join(flash_dir, name))
+            else:
+                print(f"⚠️ {name} not found next to the script, not copied to {device}/flash")
+
+        volume_paths[device] = {'flash': os.path.abspath(flash_dir)}
 
     return volume_paths
 
@@ -183,11 +210,7 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run
             'privileged': True,
             'hostname': device,
             'volumes': [
-                {'type': 'bind', 'source': paths.get("ceos_config", ""), 'target': '/mnt/flash/ceos-config', 'read_only': True},
-                {'type': 'bind', 'source': paths.get("eos_mapping", ""), 'target': '/mnt/flash/EosIntfMapping.json', 'read_only': True},
-                {'type': 'bind', 'source': paths.get("startup_config", ""), 'target': '/mnt/flash/startup-config'},
-                {'type': 'bind', 'source': os.path.abspath("setup_entropy.sh"), 'target': '/mnt/flash/setup_entropy.sh', 'read_only': True},
-                {'type': 'bind', 'source': os.path.abspath("enable_entropy.sh"), 'target': '/mnt/flash/enable_entropy.sh', 'read_only': True},
+                {'type': 'bind', 'source': paths.get('flash', ''), 'target': '/mnt/flash'},
             ],
             'environment': {
                 'CEOS': '1', 'EOS_PLATFORM': 'ceoslab', 'container': 'docker',
@@ -244,7 +267,8 @@ def main():
         devices.setdefault(link['device2'], set()).add(link['intf2'])
 
     ceos_image = select_ceos_image(auto=args.auto, dry_run=args.dry_run)
-    volume_paths = generate_device_files(devices, connections, dry_run=args.dry_run)
+    volume_paths = generate_device_files(devices, connections, dry_run=args.dry_run,
+                                         reset_startup=args.reset_startup)
     generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run=args.dry_run)
 
     if not args.dry_run:
