@@ -87,11 +87,18 @@ Ports can be written as `ethN` or as the labels from the topology file (`Etherne
 | `pvlan vlan del <vid> <ports>` | Remove a VLAN from ports. |
 | `pvlan isolate <ports>` | Isolated ports cannot talk to other isolated ports. |
 | `pvlan open <ports>` | Clear isolation on ports. |
-| `pvlan l3 <port> <vid> <addr/len>` | Give one port its own IP in VLAN `<vid>`, as the subinterface `ethN.<vid>`. |
+| `pvlan l3 <port> <vid> <addr/len> [--vrf <name>] [--gw <ip>]` | Give one port its own IP in VLAN `<vid>`, as the subinterface `ethN.<vid>`. `--vrf` puts it in a VRF, `--gw` adds a default gateway (both optional). |
 | `pvlan l3 del <port> <vid>` | Remove that port IP interface. |
-| `pvlan ip <vid> <addr/len>` | Add an IP to the switch itself in VLAN `<vid>` (like an SVI, interface `br0.<vid>`). Run again with another subnet to add more addresses. |
+| `pvlan ip <vid> <addr/len> [--vrf <name>] [--gw <ip>]` | Add an IP to the switch itself in VLAN `<vid>` (like an SVI, interface `br0.<vid>`). Run again with another subnet to add more addresses. `--vrf` and `--gw` work as for `l3`. |
 | `pvlan ip del <vid> [addr/len]` | Remove one address, or the whole IP interface if no address is given. |
-| `pvlan show` | Show VLAN membership, IP interfaces and isolation state. |
+| `pvlan vrf add <name>` | Create a VRF, a separate routing table. |
+| `pvlan vrf del <name>` | Delete a VRF. Its interfaces go back to the default table. |
+| `pvlan vrf attach <name> <iface>...` | Move interfaces such as `eth1.100` or `br0.100` into a VRF. Their IPs are kept. |
+| `pvlan vrf detach <iface>...` | Move interfaces back to the default table. |
+| `pvlan vrf show` | List the VRFs, their interfaces and default routes. |
+| `pvlan gw <vrf> <ip>` | Set an optional default gateway for a VRF. |
+| `pvlan gw del <vrf>` | Remove it again. |
+| `pvlan show` | Show VLAN membership, IP interfaces, VRFs and isolation state. |
 
 ## Two modes: bridge mode and L3 mode
 
@@ -189,6 +196,35 @@ pvlan ip 100 10.0.100.254/24
 pvlan ip 100 10.0.200.254/24
 ```
 
+### 7. One VRF per application, with an optional gateway each
+
+A VRF is a separate routing table. Two applications can use the same subnet, and each VRF can have its own default gateway. The gateway is optional: leave out `--gw` and the VRF only has its connected subnet.
+
+```sh
+pvlan l3 Ethernet1 100 10.0.0.10/24 --vrf APP-1 --gw 10.0.0.1
+pvlan l3 Ethernet2 100 10.0.0.10/24 --vrf APP-2 --gw 10.0.0.254
+pvlan vrf show
+```
+
+```text
+VRFs:
+APP-1: eth1.100
+    default via 10.0.0.1 dev eth1.100
+APP-2: eth2.100
+    default via 10.0.0.254 dev eth2.100
+```
+
+Both ports use 10.0.0.10/24 and nothing clashes, because each lives in its own routing table. Ping from a VRF by naming the VRF or its interface: `ping -I APP-1 10.0.0.1`.
+
+Bridge mode works the same way:
+
+```sh
+pvlan ip 200 5.5.5.5/24 --vrf APP-3          # br0.200 goes into VRF APP-3
+pvlan gw APP-3 5.5.5.1                       # add the gateway later
+pvlan vrf attach APP-3 br0.300               # move another interface in
+pvlan gw del APP-3                           # remove the gateway again
+```
+
 ## Matching switch config (Arista cEOS)
 
 Example for the lab in the diagram above. The leaf never needs VLAN 100 or 200 in its own VLAN database. It uses L2 subinterface pairs that share a **carrier VLAN** (3001, 3002). The tag is rewritten on path 2 because the two subinterfaces in the pair use different dot1q tags.
@@ -260,10 +296,11 @@ The PVLAN-SW MACs should appear on `Et10.100` and `Et11.100`, and the gateway MA
 | `ip link set br0.100 up` says `Address not available` | The bridge had an all-zero MAC. Current scripts fix this automatically. On an older image: `MAC=$(cat /sys/class/net/eth1/address); ip link set br0 address $MAC; ip link set br0.100 address $MAC; ip link set br0 up; ip link set br0.100 up` |
 | `RTNETLINK answers: Not supported` from `setup` | The port was not in the bridge (for example after `l3` mode). Current scripts attach it automatically. On an older image: `ip link set eth1 master br0`, then repeat the command. |
 | VLAN interface is up but nothing answers | The bridge itself must be a member of the VLAN: `bridge vlan add dev br0 vid 100 self` (done by `pvlan ip`). Also check that the upstream switch carries the same VLAN. |
+| `could not create VRF` | The Docker host kernel has no VRF support. Run `modprobe vrf` on the Docker host and try again. |
 | Not sure what leaves the port | `tcpdump -eni eth1 arp or icmp` shows the VLAN tag of every frame. |
 
 ## Good to know
 
 - **Nothing is saved.** VLANs, IPs and isolation set with `pvlan` are lost when the container is recreated. Put your `pvlan` commands in a script or in your lab notes.
 - **Updating the scripts:** a new container made from an old image runs the old scripts. Rebuild the image, or copy a new `pvlan` into a running container with `docker cp pvlan <container>:/root/pvlan`.
-- **Requirements:** a Linux kernel with bridge VLAN filtering and per-port isolation (4.18 or newer), and a privileged container.
+- **Requirements:** a Linux kernel with bridge VLAN filtering and per-port isolation (4.18 or newer), and a privileged container. VRFs also need the `vrf` kernel module on the Docker host.

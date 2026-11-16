@@ -27,6 +27,45 @@ ensure_port() {
   ip link set "$1" up
 }
 
+# ---- VRF support (Linux VRF devices, one routing table each) -------------------------------------
+# A VRF gives an application its own routing table, so two apps can reuse the same subnet
+# and each VRF can have its own optional default gateway.
+vrf_ensure() {
+  if ip link show "$1" >/dev/null 2>&1; then
+    ip -d link show "$1" | grep -q "vrf table" && return 0
+    echo "error: $1 exists but is not a VRF"; return 1
+  fi
+  t=1001
+  used=$(ip -d link show type vrf 2>/dev/null | grep -o 'table [0-9]*' | awk '{print $2}')
+  while echo "$used" | grep -qx "$t"; do t=$((t+1)); done
+  ip link add "$1" type vrf table "$t" || {
+    echo "error: could not create VRF $1. The Docker host kernel needs the vrf module (run: modprobe vrf)"
+    return 1; }
+  ip link set "$1" up
+}
+# move an interface into a VRF and keep its IPv4 addresses
+vrf_attach() {
+  addrs=$(ip -o -4 addr show dev "$1" 2>/dev/null | awk '{print $4}')
+  ip link set dev "$1" master "$2" || return 1
+  for a in $addrs; do ip addr replace "$a" dev "$1"; done
+}
+set_gw() {   # <iface> <vrf or empty> <gateway>
+  if [ -n "$2" ]; then ip route replace default via "$3" dev "$1" vrf "$2"
+  else ip route replace default via "$3" dev "$1"; fi
+}
+# parse the optional "--vrf NAME" and "--gw IP" that can follow l3 and ip
+VRF=""; GW=""
+parse_opts() {
+  VRF=""; GW=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --vrf) [ -z "$2" ] && { echo "--vrf needs a name"; exit 1; }; VRF=$2; shift 2 ;;
+      --gw)  [ -z "$2" ] && { echo "--gw needs an address"; exit 1; }; GW=$2; shift 2 ;;
+      *) echo "unknown option: $1"; exit 1 ;;
+    esac
+  done
+}
+
 usage() {
 cat <<U
 pvlan setup <vid> [<port>...] [--isolate <port>...] [--tagged] [--ad]
@@ -39,14 +78,31 @@ pvlan vlan add <vid> <port>... [--tagged]   add VLAN to ports (untagged/access b
 pvlan vlan del <vid> <port>...              remove VLAN from ports
 pvlan isolate <port>...                     ports can no longer talk to other isolated ports
 pvlan open <port>...                        clear isolation (port reaches everyone in its VLAN)
-pvlan l3 <port> <vid> <addr/len>            give ONE port its own IP in VLAN <vid> (e.g. eth1.100 = 1.1.1.10/24).
+pvlan l3 <port> <vid> <addr/len> [--vrf <name>] [--gw <ip>]
+                                            give ONE port its own IP in VLAN <vid> (e.g. eth1.100 = 1.1.1.10/24).
                                             The port leaves the bridge, so there is no L2 shared with other ports
                                             and replies always leave through the port the request came in on.
 pvlan l3 del <port> <vid>                   remove that port IP interface
-pvlan ip <vid> <addr/len>                   add an IP to the switch itself in VLAN <vid> (like an SVI).
+pvlan ip <vid> <addr/len> [--vrf <name>] [--gw <ip>]
+                                            add an IP to the switch itself in VLAN <vid> (like an SVI).
                                             Run it again with another subnet to add more addresses.
 pvlan ip del <vid> [<addr/len>]             remove one address, or the whole IP interface if none given
-pvlan show                                  VLAN membership, isolation state and IPs
+pvlan vrf add <name>                        create a VRF (its own routing table)
+pvlan vrf del <name>                        delete a VRF (its interfaces go back to the default table)
+pvlan vrf attach <name> <iface>...          move interfaces (eth1.100, br0.100 ...) into a VRF, IPs are kept
+pvlan vrf detach <iface>...                 move interfaces back to the default table
+pvlan vrf show                              VRFs, their interfaces and default routes
+pvlan gw <vrf> <ip>                         optional default gateway for a VRF
+pvlan gw del <vrf>                          remove it again
+pvlan show                                  VLAN membership, isolation state, IPs and VRFs
+
+--vrf puts the new IP interface in that VRF (created if missing). --gw adds a default route through that
+gateway, inside the VRF if one is given. Both are optional. Without --vrf nothing changes.
+
+Same subnet in two apps, each in its own VRF, each with its own gateway:
+  pvlan l3 Ethernet1 100 10.0.0.10/24 --vrf APP-1 --gw 10.0.0.1
+  pvlan l3 Ethernet2 100 10.0.0.10/24 --vrf APP-2 --gw 10.0.0.254
+  ping -I APP-1 10.0.0.1 ; ping -I APP-2 10.0.0.254
 
 Per-port IPs, both in VLAN 100 (like ACI endpoints with separate gateways):
   pvlan l3 Ethernet1 100 1.1.1.10/24 ; pvlan l3 Ethernet2 100 2.2.2.10/24
@@ -111,16 +167,21 @@ case "$1" in
     fi
     p=$(resolve "$2"); vid=$3; addr=$4
     [ -z "$p" ] || [ -z "$vid" ] || [ -z "$addr" ] && { usage; exit 1; }
+    [ $# -ge 5 ] && { shift 4; parse_opts "$@"; } || { VRF=""; GW=""; }
+    [ -n "$VRF" ] && { vrf_ensure "$VRF" || exit 1; }
     ip link set "$p" nomaster 2>/dev/null            # a port with its own IP cannot be a bridge port
     ip addr flush dev "$p"; ip link set "$p" up
     ip link add link "$p" name "$p.$vid" type vlan id "$vid" 2>/dev/null
+    [ -n "$VRF" ] && { ip link set dev "$p.$vid" master "$VRF" || exit 1; }   # enslave before the address
     ip addr replace "$addr" dev "$p.$vid"
     ip link set "$p.$vid" up
     # answer ARP only for this interface's own address and never route between ports
     echo 1 > "/proc/sys/net/ipv4/conf/$p.$vid/arp_ignore"
     echo 2 > "/proc/sys/net/ipv4/conf/$p.$vid/arp_announce"
     echo 0 > /proc/sys/net/ipv4/ip_forward
-    echo "$p.$vid:"; ip -br addr show "$p.$vid" ;;
+    [ -n "$GW" ] && set_gw "$p.$vid" "$VRF" "$GW"
+    echo "$p.$vid:"; ip -br addr show "$p.$vid"
+    [ -n "$VRF" ] && echo "VRF $VRF" ;;
   ip)
     if [ "$2" = "del" ]; then
       if [ -n "$4" ]; then ip addr del "$4" dev "br0.$3"
@@ -129,18 +190,52 @@ case "$1" in
     fi
     vid=$2; addr=$3
     [ -z "$vid" ] || [ -z "$addr" ] && { usage; exit 1; }
+    [ $# -ge 4 ] && { shift 3; parse_opts "$@"; } || { VRF=""; GW=""; }
+    [ -n "$VRF" ] && { vrf_ensure "$VRF" || exit 1; }
     ensure_bridge
     bridge vlan add dev br0 vid "$vid" self            # let br0 itself take part in the VLAN
     ip link add link br0 name "br0.$vid" type vlan id "$vid" 2>/dev/null
     ip link set "br0.$vid" address "$(cat /sys/class/net/br0/address)"
+    [ -n "$VRF" ] && { ip link set dev "br0.$vid" master "$VRF" || exit 1; }   # enslave before the address
     ip addr replace "$addr" dev "br0.$vid"      # a different subnet is added next to the others
     ip link set "br0.$vid" up || echo "warning: br0.$vid did not come up"
-    echo "br0.$vid addresses:"; ip -br addr show "br0.$vid" ;;
+    [ -n "$GW" ] && set_gw "br0.$vid" "$VRF" "$GW"
+    echo "br0.$vid addresses:"; ip -br addr show "br0.$vid"
+    [ -n "$VRF" ] && echo "VRF $VRF" ;;
+  vrf)
+    case "$2" in
+      add)    [ -z "$3" ] && { usage; exit 1; }; vrf_ensure "$3" && ip -br link show "$3" ;;
+      del)    [ -z "$3" ] && { usage; exit 1; }; ip link del "$3" ;;
+      attach) v=$3; [ -z "$v" ] || [ -z "$4" ] && { usage; exit 1; }
+              vrf_ensure "$v" || exit 1; shift 3
+              for i in "$@"; do vrf_attach "$i" "$v" || echo "warning: could not move $i into $v"; done ;;
+      detach) shift 2; [ -z "$1" ] && { usage; exit 1; }
+              for i in "$@"; do
+                addrs=$(ip -o -4 addr show dev "$i" 2>/dev/null | awk '{print $4}')
+                ip link set dev "$i" nomaster
+                for a in $addrs; do ip addr replace "$a" dev "$i"; done
+              done ;;
+      show|"") "$0" show | sed -n '/^VRFs:/,/^$/p' ;;
+      *) usage; exit 1 ;;
+    esac ;;
+  gw)
+    if [ "$2" = "del" ]; then ip route del default vrf "$3"; exit $?; fi
+    [ -z "$2" ] || [ -z "$3" ] && { usage; exit 1; }
+    ip route replace default via "$3" vrf "$2" ;;
   isolate) shift; for a in "$@"; do bridge link set dev "$(resolve "$a")" isolated on; done ;;
   open)    shift; for a in "$@"; do bridge link set dev "$(resolve "$a")" isolated off; done ;;
   show)
     bridge vlan show
     echo; echo "IP interfaces:"; ip -br addr show | grep -E '^(br0|eth[0-9]+)\.' || echo "(none)"
+    echo; echo "VRFs:"
+    vrfs=$(ip -o link show type vrf 2>/dev/null | awk -F': ' '{n=$2; sub(/@.*/,"",n); print n}')
+    if [ -z "$vrfs" ]; then echo "(none)"; else
+      for v in $vrfs; do
+        members=$(ip -o link show master "$v" 2>/dev/null | awk -F': ' '{n=$2; sub(/@.*/,"",n); printf "%s ", n}')
+        echo "$v: ${members:-(no interfaces)}"
+        ip -4 route show vrf "$v" default | sed 's/^/    /'
+      done
+    fi
     echo; echo "port isolation:"
     bridge -d link show | awk '/^[0-9]+:/ {n=$2; sub(/@.*/,"",n); sub(/:$/,"",n)} {for(i=1;i<=NF;i++) if($i=="isolated") print n, "isolated", $(i+1)}' ;;
   *) usage ;;
