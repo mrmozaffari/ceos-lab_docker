@@ -19,20 +19,20 @@ For the full command list and troubleshooting, see [README.md](README.md).
 
 ## Topology
 
-![Overview of the lab: Host1 and Host2 connected to LEAF1A, LEAF1A connected to GW](images/aci-example-overview.png)
+![Overview of the lab: ACI-L1 and Host2 connected to LEAF1A, LEAF1A connected to GW](images/aci-example-overview.png)
 
 In the diagram every host port is shown as a physical interface with the VLANs it carries. The Linux bridge that `pvlan-sw` uses internally is not drawn, so you only see ports, VLANs and IPs.
 
 | Device | Port | VLANs | IP addresses |
 | --- | --- | --- | --- |
-| Host1 | Eth1 (trunk) | 100, 101 | 1.1.1.10/24 on VLAN 100, 3.3.3.10/24 on VLAN 101 |
-| Host1 | Eth2 (trunk) | 100 | 2.2.2.10/24 on VLAN 100 |
-| Host2 | Eth1 (trunk) | 100 | 1.1.1.11/24 on VLAN 100 |
+| ACI-L1 | Eth1 (trunk) | 100, 101 | 1.1.1.10/24 on VLAN 100, 3.3.3.10/24 on VLAN 101 |
+| ACI-L1 | Eth2 (trunk) | 100 | 2.2.2.10/24 on VLAN 100 |
+| Host2 | Eth1 (trunk) | 100, 101 | 1.1.1.11/24 on VLAN 100, 3.3.3.11/24 on VLAN 101 |
 | Host2 | Eth2 (trunk) | 200 | 2.2.2.11/24 on VLAN 200 |
 | GW | Et1 (trunk) | 100, 101 | 1.1.1.1/24 on VLAN 100, 3.3.3.1/24 on VLAN 101 |
 | GW | Et2 (trunk) | 200, 201 | 2.2.2.1/24 on VLAN 200, 4.4.4.1/24 on VLAN 201 |
 
-Host1 sends VLAN 100 on **both** of its ports, but the two ports end up in different gateway VLANs (100 and 200). That is the ACI style part: the VLAN number on the host does not have to match the VLAN number on the gateway.
+ACI-L1 sends VLAN 100 on **both** of its ports, but the two ports end up in different gateway VLANs (100 and 200). That is the ACI style part: the VLAN number on the host does not have to match the VLAN number on the gateway.
 
 ### Topology file
 
@@ -41,14 +41,14 @@ management_network: a-135
 subnet_pool: 172.16.0.0/16
 
 linux_nodes:
-  Host1:
+  ACI-L1:
     image: pvlan-sw:latest
   Host2:
     image: pvlan-sw:latest
 
 connections:
-  - { device1: Host1, intf1: Ethernet1, device2: LEAF1A, intf2: Ethernet10 }
-  - { device1: Host1, intf1: Ethernet2, device2: LEAF1A, intf2: Ethernet11 }
+  - { device1: ACI-L1, intf1: Ethernet1, device2: LEAF1A, intf2: Ethernet10 }
+  - { device1: ACI-L1, intf1: Ethernet2, device2: LEAF1A, intf2: Ethernet11 }
   - { device1: Host2, intf1: Ethernet1, device2: LEAF1A, intf2: Ethernet12 }
   - { device1: Host2, intf1: Ethernet2, device2: LEAF1A, intf2: Ethernet13 }
   - { device1: LEAF1A, intf1: Ethernet1, device2: GW, intf2: Ethernet1 }
@@ -60,14 +60,14 @@ Generate and start it:
 ```sh
 python3 generate-lab.py topology-pvlan.yml
 docker-compose up -d
-docker exec -it Host1 sh
+docker exec -it ACI-L1 sh
 ```
 
 ## Host configuration
 
 Nothing is configured at boot. Open a shell in each host and run the `pvlan` commands below.
 
-### Host1: one IP per port and VLAN (L3 mode)
+### ACI-L1: one IP per port and VLAN (L3 mode)
 
 Each port keeps its own IP per VLAN. Nothing is shared between the ports.
 
@@ -91,13 +91,15 @@ On the wire, Eth1 sends VLAN 100 and VLAN 101 tagged, and Eth2 sends VLAN 100 ta
 
 ### Host2: trunk ports with isolation (bridge mode)
 
-Both ports are tagged members of one VLAN each, the two ports are isolated from each other, and the host has an address in each VLAN.
+Eth1 carries VLANs 100 and 101, Eth2 carries VLAN 200, the two ports are isolated from each other, and the host has an address in each VLAN.
 
 ```sh
 pvlan vlan add 100 Ethernet1 --tagged
+pvlan vlan add 101 Ethernet1 --tagged
 pvlan vlan add 200 Ethernet2 --tagged
 pvlan isolate Ethernet1 Ethernet2
 pvlan ip 100 1.1.1.11/24
+pvlan ip 101 3.3.3.11/24
 pvlan ip 200 2.2.2.11/24
 pvlan show
 ```
@@ -107,13 +109,16 @@ Result:
 ```
 port              vlan-id
 eth1              100
+                  101
 eth2              200
 br0               100
+                  101
                   200
 
 IP interfaces:
 br0.100@br0      UP             1.1.1.11/24
 br0.200@br0      UP             2.2.2.11/24
+br0.101@br0      UP             3.3.3.11/24
 
 port isolation:
 eth1 isolated on
@@ -130,14 +135,14 @@ The leaf does not create VLAN 100, 101, 200 or 201. It uses **carrier VLANs** (3
 
 | Carrier VLAN | Host side | GW side | What it connects |
 | --- | --- | --- | --- |
-| 3001 | Et10 VLAN 100 (Host1 Eth1), Et12 VLAN 100 (Host2 Eth1) | Et1 VLAN 100 | The 1.1.1.0/24 network |
-| 3003 | Et10 VLAN 101 (Host1 Eth1) | Et1 VLAN 101 | The 3.3.3.0/24 network |
-| 3002 | Et11 VLAN 100 (Host1 Eth2), Et13 VLAN 200 (Host2 Eth2) | Et2 VLAN 200 | The 2.2.2.0/24 network. Host1 sends VLAN 100, the GW sees VLAN 200. |
-| 3004 | Et11 VLAN 101 (Host1 Eth2, not used yet) | Et2 VLAN 201 | The 4.4.4.0/24 network |
+| 3001 | Et10 VLAN 100 (ACI-L1 Eth1), Et12 VLAN 100 (Host2 Eth1) | Et1 VLAN 100 | The 1.1.1.0/24 network |
+| 3003 | Et10 VLAN 101 (ACI-L1 Eth1), Et12 VLAN 101 (Host2 Eth1) | Et1 VLAN 101 | The 3.3.3.0/24 network |
+| 3002 | Et11 VLAN 100 (ACI-L1 Eth2), Et13 VLAN 200 (Host2 Eth2) | Et2 VLAN 200 | The 2.2.2.0/24 network. ACI-L1 sends VLAN 100, the GW sees VLAN 200. |
+| 3004 | Et11 VLAN 101 (ACI-L1 Eth2, not used yet) | Et2 VLAN 201 | The 4.4.4.0/24 network |
 
 The leaf uses two techniques.
 
-**Layer 2 subinterfaces** (ports facing Host1 and the GW). The parent port is a routed port (`no switchport`), and each subinterface matches one VLAN tag and drops the frame into a carrier VLAN.
+**Layer 2 subinterfaces** (ports facing ACI-L1 and the GW). The parent port is a routed port (`no switchport`), and each subinterface matches one VLAN tag and drops the frame into a carrier VLAN.
 
 **VLAN translation** (ports facing Host2). The ports stay normal trunk ports, and a translation line maps the VLAN the host sends to a carrier VLAN.
 
@@ -146,7 +151,7 @@ The leaf uses two techniques.
 ```
 vlan 3001-3004
 
-! Host1 Eth1, carries VLAN 100 and 101
+! ACI-L1 Eth1, carries VLAN 100 and 101
 interface Ethernet10
    no switchport
 interface Ethernet10.100
@@ -157,7 +162,7 @@ interface Ethernet10.101
    encapsulation dot1q vlan 101
    vlan id 3003
 
-! Host1 Eth2, carries VLAN 100 (VLAN 101 prepared)
+! ACI-L1 Eth2, carries VLAN 100 (VLAN 101 prepared)
 interface Ethernet11
    no switchport
 interface Ethernet11.100
@@ -167,11 +172,11 @@ interface Ethernet11.101
    encapsulation dot1q vlan 101
    vlan id 3004
 
-! Host2 Eth1 and Eth2, plain trunks with translation to the carrier VLANs
+! Host2 Eth1 (VLAN 100, 101) and Eth2 (VLAN 200), plain trunks with translation to the carrier VLANs
 interface Ethernet12
    switchport mode trunk
    switchport vlan translation 100 3001
-   switchport vlan translation 101 3002
+   switchport vlan translation 101 3003
    spanning-tree portfast edge
    spanning-tree guard root
 interface Ethernet13
@@ -202,7 +207,7 @@ interface Ethernet2.201
 no ip routing
 ```
 
-The rewrite from VLAN 100 to VLAN 200 on Host1 Eth2 happens because `Ethernet11.100` and `Ethernet2.200` share carrier 3002 but use different dot1q tags. Each extra VLAN needs one more pair of subinterfaces and one more carrier VLAN.
+The rewrite from VLAN 100 to VLAN 200 on ACI-L1 Eth2 happens because `Ethernet11.100` and `Ethernet2.200` share carrier 3002 but use different dot1q tags. Each extra VLAN needs one more pair of subinterfaces and one more carrier VLAN.
 
 ## Gateway configuration
 
@@ -236,7 +241,7 @@ no ip routing
 
 Always use `-I <interface>` so the ping leaves through the interface you mean. Several lab addresses (for example 1.1.1.1) are also public addresses, and without `-I` a ping can silently go out through the management port.
 
-**Host1:**
+**ACI-L1:**
 
 ```sh
 ping -c 3 -I eth1.100 1.1.1.1
@@ -248,14 +253,16 @@ ping -c 3 -I eth2.100 2.2.2.1
 
 ```sh
 ping -c 3 -I br0.100 1.1.1.1
+ping -c 3 -I br0.101 3.3.3.1
 ping -c 3 -I br0.200 2.2.2.1
 ```
 
-**Between the hosts** (they share carrier VLANs 3001 and 3002 on the leaf):
+**Between the hosts** (they share carrier VLANs 3001, 3003 and 3002 on the leaf):
 
 ```sh
-# on Host1
+# on ACI-L1
 ping -c 3 -I eth1.100 1.1.1.11
+ping -c 3 -I eth1.101 3.3.3.11
 ping -c 3 -I eth2.100 2.2.2.11
 ```
 
@@ -270,11 +277,12 @@ tcpdump -eni eth1 arp or icmp
 ```
 show mac address-table vlan 3001
 show mac address-table vlan 3002
+show mac address-table vlan 3003
 ```
 
 ## Things to know
 
-- **Isolation only applies inside Host2.** It stops Host2 Eth1 and Host2 Eth2 from reaching each other through the host. It does not stop Host2 from reaching Host1 or the GW, because the leaf puts them in the same carrier VLANs.
-- **One line looks like a leftover.** `Ethernet12` has `switchport vlan translation 101 3002`. Host2 does not use VLAN 101 today. If a VLAN 101 frame ever arrived on Et12 it would land in carrier 3002, together with the 2.2.2.0/24 network. If you did not mean that, remove the line (use carrier 3003 if you want VLAN 101 on the 3.3.3.0/24 network).
+- **Isolation only applies inside Host2.** It stops Host2 Eth1 and Host2 Eth2 from reaching each other through the host. It does not stop Host2 from reaching ACI-L1 or the GW, because the leaf puts them in the same carrier VLANs (3001, 3002 and 3003).
+- **VLAN 101 is shared on purpose.** ACI-L1 Eth1 and Host2 Eth1 both send VLAN 101 into carrier 3003, so 3.3.3.10 and 3.3.3.11 sit in the same network as the GW address 3.3.3.1.
 - **Host settings are not saved.** Rebuilding or recreating a host container loses everything set with `pvlan`. Keep the commands from this page handy.
 - **Save the switch configs** with `write memory` on LEAF1A and GW if you want them to survive a restart.
