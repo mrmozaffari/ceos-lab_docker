@@ -34,6 +34,7 @@ A larger example with two hosts, a trunk, isolation, one leaf and a gateway is i
 | `Dockerfile` | Alpine image with `iproute2`, `bridge-utils` and `tcpdump` |
 | `entrypoint.sh` | Runs when the container starts: creates the VLAN-aware bridge `br0` and attaches the data ports |
 | `images/` | Diagrams used in this README |
+| `shellrc` | Shell prompt and colors: the hostname in green as the prompt, and colored `ls`, `grep`, `ip` and `bridge` |
 | `pvlan` | The command you use inside the container (installed as `/root/pvlan` and `/usr/local/bin/pvlan`) |
 
 ## Build the image

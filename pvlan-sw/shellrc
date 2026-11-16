@@ -1,0 +1,11 @@
+# Interactive shell setup for pvlan-sw (read by sh through the ENV variable set in the Dockerfile).
+# Prompt: the container hostname in green, like  Host2#  (root shows #, other users $).
+G=$(printf '\033[1;32m'); R=$(printf '\033[0m')
+export PS1="\[${G}\]\h\[${R}\]\\$ "
+
+# colors for the tools used most in this lab
+alias ls='ls --color=auto'
+alias ll='ls -l --color=auto'
+alias grep='grep --color=auto'
+alias ip='ip -c'
+alias bridge='bridge -c'
