@@ -1,0 +1,18 @@
+management_network: a-135
+subnet_pool: 172.16.0.0/16
+
+# Any device listed here becomes a plain Linux container (image pvlan-sw) instead of a cEOS.
+# Interface names are just labels: the first connection becomes eth1, the second eth2, and so on.
+linux_nodes:
+  PVLAN-SW:
+    image: pvlan-sw:latest     # optional, this is the default
+    # No VLAN or IP is defined here. Configure inside the container:
+    #   docker exec -it PVLAN-SW sh
+    #   ./pvlan l3 Ethernet1 100 1.1.1.10/24     (per-port IP in VLAN 100)
+    #   ./pvlan l3 Ethernet2 100 2.2.2.10/24
+    #   ./pvlan help                              (bridge mode, isolation, more)
+
+connections:
+  - { device1: PVLAN-SW, intf1: Ethernet1, device2: LEAF1A, intf2: Ethernet10 }
+  - { device1: PVLAN-SW, intf1: Ethernet2, device2: LEAF1A, intf2: Ethernet11 }
+  - { device1: LEAF1A, intf1: Ethernet1, device2: GW, intf2: Ethernet1 }

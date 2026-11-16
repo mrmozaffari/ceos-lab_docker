@@ -1,0 +1,8 @@
+FROM alpine:3.20
+RUN apk add --no-cache iproute2 bridge-utils tcpdump
+COPY entrypoint.sh /entrypoint.sh
+# the script lives in root's home, with a symlink so "pvlan" also works from anywhere
+COPY pvlan /root/pvlan
+RUN chmod +x /entrypoint.sh /root/pvlan && ln -s /root/pvlan /usr/local/bin/pvlan
+WORKDIR /root
+ENTRYPOINT ["/entrypoint.sh"]

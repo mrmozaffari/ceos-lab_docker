@@ -68,6 +68,19 @@ def validate_topology(topo):
     for conn in topo['connections']:
         if not all(k in conn for k in ('device1', 'intf1', 'device2', 'intf2')):
             raise ValueError(f"Invalid connection entry: {conn}")
+    linux = topo.get('linux_nodes') or {}
+    if not isinstance(linux, dict):
+        raise ValueError("'linux_nodes' must be a mapping of device name to settings")
+    seen = {c[k] for c in topo['connections'] for k in ('device1', 'device2')}
+    for name, cfg in linux.items():
+        cfg = cfg or {}
+        if name not in seen:
+            raise ValueError(f"linux_nodes entry '{name}' is not used in any connection")
+        labels = [c[i] for c in topo['connections']
+                  for d, i in (('device1', 'intf1'), ('device2', 'intf2')) if c[d] == name]
+        for lbl in cfg.get('isolated', []) or []:
+            if lbl not in labels:
+                raise ValueError(f"linux_nodes '{name}': isolated port '{lbl}' is not in its connections")
 
 
 def get_existing_docker_subnets():
@@ -98,6 +111,34 @@ def mac_from_name(name):
     return f'02:{h[0:2]}:{h[2:4]}:{h[4:6]}:{h[6:8]}:{h[8:10]}'
 
 
+LINUX_DEFAULT_IMAGE = 'pvlan-sw:latest'
+
+
+def linux_ports(device, connections):
+    """Ordered list of the interface labels a device uses; label i becomes eth(i+1) in the container."""
+    ports = []
+    for conn in connections:
+        for dev_key, intf_key in (('device1', 'intf1'), ('device2', 'intf2')):
+            if conn[dev_key] == device:
+                ports.append(conn[intf_key])
+    return ports
+
+
+def linux_env(device, cfg, connections):
+    """VLANs are NOT defined here, they are created inside the container with the pvlan command.
+    Optional boot-time settings in the topology: isolated (list of port labels), vlan (pre-create it)."""
+    cfg = cfg or {}
+    ports = linux_ports(device, connections)
+    isolated = set(cfg.get('isolated') or [])
+    env = {
+        'PORT_MAP': ' '.join(f"{p}=eth{i+1}" for i, p in enumerate(ports)),
+        'ISOLATED_PORTS': ' '.join(f"eth{i+1}" for i, p in enumerate(ports) if p in isolated),
+    }
+    if cfg.get('vlan') is not None:
+        env['VLAN'] = str(cfg['vlan'])
+    return env
+
+
 ENTROPY_SCRIPTS = ('setup_entropy.sh', 'enable_entropy.sh')
 
 
@@ -119,7 +160,7 @@ def seed_startup_config(device, device_dir, flash_dir, reset):
         f.write(STARTUP_CONFIG)
 
 
-def generate_device_files(devices, connections, dry_run, reset_startup=False):
+def generate_device_files(devices, connections, dry_run, reset_startup=False, linux_nodes=None):
     """Build devices/<device>/flash/, which is bind-mounted as a whole onto /mnt/flash."""
     volume_paths = {}
     interface_mapping_per_device = defaultdict(list)
@@ -135,6 +176,8 @@ def generate_device_files(devices, connections, dry_run, reset_startup=False):
     os.makedirs('devices', exist_ok=True)
 
     for device, intfs in interface_mapping_per_device.items():
+        if device in (linux_nodes or {}):
+            continue  # plain Linux container, no cEOS flash/config needed
         device_dir = os.path.join('devices', device)
         flash_dir = os.path.join(device_dir, 'flash')
         os.makedirs(flash_dir, exist_ok=True)
@@ -186,7 +229,7 @@ def select_ceos_image(auto, dry_run):
         print("⚠️ Invalid choice. Try again.")
 
 
-def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run):
+def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run, linux_nodes=None, connections=None):
     if dry_run:
         print("📝 Dry-run: would generate docker-compose.yml.")
         return
@@ -204,6 +247,18 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run
     for device in devices:
         nets = [mgmt_net] + [link['net_name'] for link in links if device in (link['device1'], link['device2'])]
         paths = volume_paths.get(device, {})
+
+        if device in (linux_nodes or {}):
+            cfg = linux_nodes[device] or {}
+            compose['services'][device] = {
+                'image': cfg.get('image', LINUX_DEFAULT_IMAGE),
+                'privileged': True,
+                'hostname': device,
+                'labels': {'lab.kind': 'linux'},
+                'environment': linux_env(device, cfg, connections),
+                'networks': nets,
+            }
+            continue
 
         compose['services'][device] = {
             'image': ceos_image,
@@ -266,10 +321,16 @@ def main():
         devices.setdefault(link['device1'], set()).add(link['intf1'])
         devices.setdefault(link['device2'], set()).add(link['intf2'])
 
-    ceos_image = select_ceos_image(auto=args.auto, dry_run=args.dry_run)
+    linux_nodes = topo.get('linux_nodes') or {}
+    if linux_nodes:
+        print("\n🐧 Linux nodes: " + ", ".join(linux_nodes))
+    ceos_image = None
+    if any(d not in linux_nodes for d in devices):
+        ceos_image = select_ceos_image(auto=args.auto, dry_run=args.dry_run)
     volume_paths = generate_device_files(devices, connections, dry_run=args.dry_run,
-                                         reset_startup=args.reset_startup)
-    generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run=args.dry_run)
+                                         reset_startup=args.reset_startup, linux_nodes=linux_nodes)
+    generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run=args.dry_run,
+                     linux_nodes=linux_nodes, connections=connections)
 
     if not args.dry_run:
         print("\n✅ docker-compose.yml generated successfully. 🎉\n")

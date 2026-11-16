@@ -1,0 +1,147 @@
+#!/bin/sh
+# pvlan: configure VLANs and port isolation on br0 at runtime.
+# Ports can be given as ethN or as the labels used in the topology file (Ethernet1 ...).
+
+resolve() {
+  for kv in $PORT_MAP; do
+    [ "${kv%%=*}" = "$1" ] && { echo "${kv#*=}"; return; }
+  done
+  echo "$1"
+}
+
+# br0 needs a real MAC (VLAN interfaces on top of it cannot come up with 00:00:00:00:00:00),
+# must be up, and a port must be a bridge member before it can carry bridge VLANs.
+ensure_bridge() {
+  ip link show br0 >/dev/null 2>&1 || ip link add br0 type bridge vlan_filtering 1 vlan_default_pvid 0
+  if [ "$(cat /sys/class/net/br0/address 2>/dev/null)" = "00:00:00:00:00:00" ]; then
+    first=""; for kv in $PORT_MAP; do first="${kv#*=}"; break; done
+    mac=$(cat "/sys/class/net/${first:-eth1}/address" 2>/dev/null)
+    [ -n "$mac" ] && ip link set br0 address "$mac"
+  fi
+  ip link set br0 up
+}
+ensure_port() {
+  ensure_bridge
+  ip addr flush dev "$1" 2>/dev/null
+  ip link set "$1" master br0 || echo "warning: could not attach $1 to br0"
+  ip link set "$1" up
+}
+
+usage() {
+cat <<U
+pvlan setup <vid> [<port>...] [--isolate <port>...] [--tagged] [--ad]
+                                            one shot: put ports in VLAN <vid> (all data ports if none
+                                            given) and isolate the ones after --isolate
+                                            --tagged: ports are trunks carrying VLAN <vid> as the outer tag
+                                                      (Q-in-Q: inner tags pass through untouched)
+                                            --ad:     outer tag ethertype is 0x88a8 (802.1ad) instead of 0x8100
+pvlan vlan add <vid> <port>... [--tagged]   add VLAN to ports (untagged/access by default)
+pvlan vlan del <vid> <port>...              remove VLAN from ports
+pvlan isolate <port>...                     ports can no longer talk to other isolated ports
+pvlan open <port>...                        clear isolation (port reaches everyone in its VLAN)
+pvlan l3 <port> <vid> <addr/len>            give ONE port its own IP in VLAN <vid> (e.g. eth1.100 = 1.1.1.10/24).
+                                            The port leaves the bridge, so there is no L2 shared with other ports
+                                            and replies always leave through the port the request came in on.
+pvlan l3 del <port> <vid>                   remove that port IP interface
+pvlan ip <vid> <addr/len>                   add an IP to the switch itself in VLAN <vid> (like an SVI).
+                                            Run it again with another subnet to add more addresses.
+pvlan ip del <vid> [<addr/len>]             remove one address, or the whole IP interface if none given
+pvlan show                                  VLAN membership, isolation state and IPs
+
+Per-port IPs, both in VLAN 100 (like ACI endpoints with separate gateways):
+  pvlan l3 Ethernet1 100 1.1.1.10/24 ; pvlan l3 Ethernet2 100 2.2.2.10/24
+  ping -I eth1.100 1.1.1.1 ; ping -I eth2.100 2.2.2.1
+
+Two subnets on one isolated VLAN (each endpoint uses its own gateway address):
+  pvlan ip 100 10.0.100.254/24 ; pvlan ip 100 10.0.200.254/24
+
+Example (VLAN 100 on two isolated hosts and an open gateway port):
+  pvlan setup 100 Ethernet1 Ethernet2 Ethernet3 --isolate Ethernet1 Ethernet2
+  Q-in-Q trunks: pvlan setup 100 Ethernet1 Ethernet2 Ethernet3 --isolate Ethernet1 Ethernet2 --tagged
+  (or step by step: pvlan vlan add 100 ... [--tagged]  then  pvlan isolate ...)
+Note: isolation is per port in the Linux kernel, not per VLAN.
+U
+}
+
+case "$1" in
+  setup)
+    vid=$2; shift 2 2>/dev/null
+    [ -z "$vid" ] && { usage; exit 1; }
+    members=""; iso=""; mode=m; tagged=0; ad=0
+    for a in "$@"; do
+      if [ "$a" = "--isolate" ]; then mode=i; continue; fi
+      if [ "$a" = "--tagged" ]; then tagged=1; continue; fi
+      if [ "$a" = "--ad" ]; then ad=1; continue; fi
+      if [ $mode = m ]; then members="$members $(resolve "$a")"; else iso="$iso $(resolve "$a")"; fi
+    done
+    if [ -z "$members" ]; then
+      for kv in $PORT_MAP; do members="$members ${kv#*=}"; done
+    fi
+    ensure_bridge
+    [ $ad = 1 ] && ip link set br0 type bridge vlan_protocol 802.1ad
+    for p in $members; do
+      ensure_port "$p"
+      bridge vlan del dev "$p" vid "$vid" 2>/dev/null
+      if [ $tagged = 1 ]; then bridge vlan add dev "$p" vid "$vid"
+      else bridge vlan add dev "$p" vid "$vid" pvid untagged; fi
+    done
+    for p in $iso; do
+      case " $members " in *" $p "*) ;; *) echo "warning: $p is isolated but not in VLAN $vid" ;; esac
+      bridge link set dev "$p" isolated on
+    done
+    echo "VLAN $vid configured:"; "$0" show ;;
+  vlan)
+    act=$2; vid=$3; shift 3
+    tagged=0; ports=""
+    for a in "$@"; do [ "$a" = "--tagged" ] && tagged=1 || ports="$ports $(resolve "$a")"; done
+    [ -z "$vid" ] || [ -z "$ports" ] && { usage; exit 1; }
+    for p in $ports; do
+      case "$act" in
+        add) ensure_port "$p"
+             bridge vlan del dev "$p" vid "$vid" 2>/dev/null
+             if [ $tagged = 1 ]; then bridge vlan add dev "$p" vid "$vid"
+             else bridge vlan add dev "$p" vid "$vid" pvid untagged; fi ;;
+        del) bridge vlan del dev "$p" vid "$vid" ;;
+        *) usage; exit 1 ;;
+      esac
+    done ;;
+  l3)
+    if [ "$2" = "del" ]; then
+      p=$(resolve "$3"); ip link del "$p.$4" 2>/dev/null; exit 0
+    fi
+    p=$(resolve "$2"); vid=$3; addr=$4
+    [ -z "$p" ] || [ -z "$vid" ] || [ -z "$addr" ] && { usage; exit 1; }
+    ip link set "$p" nomaster 2>/dev/null            # a port with its own IP cannot be a bridge port
+    ip addr flush dev "$p"; ip link set "$p" up
+    ip link add link "$p" name "$p.$vid" type vlan id "$vid" 2>/dev/null
+    ip addr replace "$addr" dev "$p.$vid"
+    ip link set "$p.$vid" up
+    # answer ARP only for this interface's own address and never route between ports
+    echo 1 > "/proc/sys/net/ipv4/conf/$p.$vid/arp_ignore"
+    echo 2 > "/proc/sys/net/ipv4/conf/$p.$vid/arp_announce"
+    echo 0 > /proc/sys/net/ipv4/ip_forward
+    echo "$p.$vid:"; ip -br addr show "$p.$vid" ;;
+  ip)
+    if [ "$2" = "del" ]; then
+      if [ -n "$4" ]; then ip addr del "$4" dev "br0.$3"
+      else ip link del "br0.$3" 2>/dev/null; bridge vlan del dev br0 vid "$3" self 2>/dev/null; fi
+      exit 0
+    fi
+    vid=$2; addr=$3
+    [ -z "$vid" ] || [ -z "$addr" ] && { usage; exit 1; }
+    ensure_bridge
+    bridge vlan add dev br0 vid "$vid" self            # let br0 itself take part in the VLAN
+    ip link add link br0 name "br0.$vid" type vlan id "$vid" 2>/dev/null
+    ip link set "br0.$vid" address "$(cat /sys/class/net/br0/address)"
+    ip addr replace "$addr" dev "br0.$vid"      # a different subnet is added next to the others
+    ip link set "br0.$vid" up || echo "warning: br0.$vid did not come up"
+    echo "br0.$vid addresses:"; ip -br addr show "br0.$vid" ;;
+  isolate) shift; for a in "$@"; do bridge link set dev "$(resolve "$a")" isolated on; done ;;
+  open)    shift; for a in "$@"; do bridge link set dev "$(resolve "$a")" isolated off; done ;;
+  show)
+    bridge vlan show
+    echo; echo "IP interfaces:"; ip -br addr show | grep -E '^(br0|eth[0-9]+)\.' || echo "(none)"
+    echo; echo "port isolation:"
+    bridge -d link show | awk '/^[0-9]+:/ {n=$2; sub(/@.*/,"",n); sub(/:$/,"",n)} {for(i=1;i<=NF;i++) if($i=="isolated") print n, "isolated", $(i+1)}' ;;
+  *) usage ;;
+esac

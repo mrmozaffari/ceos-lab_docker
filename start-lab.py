@@ -300,12 +300,19 @@ def container_action(container):
         else:
             cprint("\n⚠️ Invalid choice", Colors.YELLOW)
 
+def container_shell(container):
+    """cEOS containers use the EOS CLI, plain Linux nodes (label lab.kind=linux) get a shell."""
+    out = subprocess.run(['docker', 'inspect', '-f', '{{index .Config.Labels "lab.kind"}}', container],
+                         capture_output=True, text=True).stdout.strip()
+    return 'sh' if out == 'linux' else 'Cli'
+
 def connect(container, method, project):
+    shell = container_shell(container)
     if method == 'tmux':
-        subprocess.Popen(['tmux', 'split-window', '-v', f"docker exec -it {container} Cli"])
+        subprocess.Popen(['tmux', 'split-window', '-v', f"docker exec -it {container} {shell}"])
         subprocess.Popen(['tmux', 'select-layout', 'tiled'])
     else:
-        subprocess.run(['docker', 'exec', '-it', container, 'Cli'])
+        subprocess.run(['docker', 'exec', '-it', container, shell])
 
 def show_tmux_cheat_sheet():
     sheet = "\n🎹 Tmux Cheat Sheet\n" + "-"*30 + """
