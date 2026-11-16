@@ -13,6 +13,8 @@ What it gives you:
 
 *Path 1 carries VLAN 100 unchanged through carrier VLAN 3001. Path 2 enters as VLAN 100 and leaves as VLAN 200 through carrier VLAN 3002 (coral box). Carrier VLANs exist only inside the leaf.*
 
+A larger example with two hosts, a trunk, isolation, one leaf and a gateway is in [ACI-example.md](ACI-example.md).
+
 ## Contents
 
 1. [Files](#files)
