@@ -59,13 +59,12 @@ Generate and start it:
 
 ```sh
 python3 generate-lab.py topology-pvlan.yml
-docker-compose up -d
-docker exec -it ACI-L1 sh
+python3 start-lab.py
 ```
 
 ## Host configuration
 
-Nothing is configured at boot. Open a shell in each host and run the `pvlan` commands below.
+Nothing is configured at boot. Once the lab is running, run the `pvlan` commands below on each host.
 
 ### ACI-L1: one IP per port and VLAN (L3 mode)
 
