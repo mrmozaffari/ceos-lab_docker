@@ -5,6 +5,7 @@
 # Optional env (from the topology file):
 #   PORT_MAP        "Ethernet1=eth1 Ethernet2=eth2 ..." so pvlan accepts topology labels
 #   ISOLATED_PORTS  ports to start in isolated mode (can be changed later with pvlan)
+#   /config         bind-mounted from devices/<name>/config, holds pvlan.conf so config survives recreate
 #   VLAN            optional: pre-create this VLAN (untagged) on all ports at boot
 PORTS=$(for kv in $PORT_MAP; do echo "${kv#*=}"; done)
 
@@ -30,6 +31,8 @@ done
 for p in $ISOLATED_PORTS; do
   bridge link set dev "$p" isolated on
 done
+# Re-apply the configuration saved by pvlan (vlans, vrfs, IPs, l3 subinterfaces, tags) from /config
+pvlan restore
 [ -n "$VLAN" ] && pvlan vlan add "$VLAN" $PORTS
 
 echo "pvlan-sw ready. Run: docker exec -it <name> sh, then: pvlan help"

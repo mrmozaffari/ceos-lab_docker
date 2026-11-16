@@ -24,8 +24,9 @@ A larger example with two hosts, a trunk, isolation, one leaf and a gateway is i
 5. [Two modes: bridge mode and L3 mode](#two-modes-bridge-mode-and-l3-mode)
 6. [Examples](#examples)
 7. [Matching switch config (Arista cEOS)](#matching-switch-config-arista-ceos)
-8. [Troubleshooting](#troubleshooting)
-9. [Good to know](#good-to-know)
+8. [Saved configuration](#saved-configuration)
+9. [Troubleshooting](#troubleshooting)
+10. [Good to know](#good-to-know)
 
 ## Files
 
@@ -100,6 +101,8 @@ Ports can be written as `ethN` or as the labels from the topology file (`Etherne
 | `pvlan gw <vrf> <ip>` | Set an optional default gateway for a VRF. |
 | `pvlan gw del <vrf>` | Remove it again. |
 | `pvlan show` | Show VLAN membership, IP interfaces, VRFs and isolation state. |
+| `pvlan save [--stdout]` | Write the current configuration to the saved file. This already happens after every change, so you rarely need it. `--stdout` only prints it. |
+| `pvlan restore [file]` | Rebuild the configuration from the saved file. The container runs this at boot. |
 
 ## Two modes: bridge mode and L3 mode
 
@@ -289,6 +292,33 @@ show mac address-table
 
 The PVLAN-SW MACs should appear on `Et10.100` and `Et11.100`, and the gateway MACs on `Et1.100` and `Et2.200`, in the carrier VLANs only.
 
+## Saved configuration
+
+Every change made with `pvlan` is written to `/config/pvlan.conf` as a plain list of `pvlan` commands. In a lab, `generate-lab.py` bind-mounts the host folder `devices/<name>/config` on `/config`, so the file survives when the container is recreated (for example by `generate-lab.py --update`). At boot the container runs `pvlan restore` and gets back:
+
+- VLANs, tagged (trunk) and untagged (access) ports, and the 802.1ad outer tag setting
+- port isolation
+- IPs on `br0.<vid>` and the per-port subinterfaces `ethN.<vid>`
+- VRFs, the interfaces in them, and their default gateways
+
+Example of the file (you can read and edit it):
+
+```
+vrf add APP-1
+vlan add 100 Ethernet1 --tagged
+isolate Ethernet1
+ip 100 1.1.1.11/24 --vrf APP-1 --gw 1.1.1.1
+l3 Ethernet3 300 10.0.0.10/24 --vrf APP-9
+gw APP-1 1.1.1.1
+```
+
+Things to know:
+
+- Only what `pvlan` configured is saved. Routes, sysctls or addresses added with raw `ip` commands are not, and only default routes (`--gw`, `pvlan gw`) are kept.
+- Port labels are saved (`Ethernet1`, not `eth1`). If a topology change gives a label a different meaning, the lines for that port are applied to the new port, or skipped with a warning when the port no longer exists.
+- A lab created before this feature has no `/config` mount yet. `generate-lab.py --update` prints the three commands that save the running node first (`docker cp` the new `pvlan` in, `pvlan save`, `docker cp` the file out), then the recreate command.
+- To start a node from scratch, delete `devices/<name>/config/pvlan.conf` before recreating it.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -302,6 +332,6 @@ The PVLAN-SW MACs should appear on `Et10.100` and `Et11.100`, and the gateway MA
 
 ## Good to know
 
-- **Nothing is saved.** VLANs, IPs and isolation set with `pvlan` are lost when the container is recreated. Put your `pvlan` commands in a script or in your lab notes.
+- **The configuration is saved** to `devices/<name>/config/pvlan.conf` and restored when the container is recreated, see [Saved configuration](#saved-configuration). Containers started by hand with `docker run` need `-v <dir>:/config` for this.
 - **Updating the scripts:** a new container made from an old image runs the old scripts. Rebuild the image, or copy a new `pvlan` into a running container with `docker cp pvlan <container>:/root/pvlan`.
 - **Requirements:** a Linux kernel with bridge VLAN filtering and per-port isolation (4.18 or newer), and a privileged container. VRFs also need the `vrf` kernel module on the Docker host.

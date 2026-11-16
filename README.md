@@ -316,7 +316,7 @@ It prints what it found and the exact command to apply it:
 
 Good to know:
 
-- **Devices that are not listed keep running untouched.** The ones that are listed are recreated. cEOS keeps its saved configuration because `devices/<name>/flash` is a bind mount, so run `write memory` first. Linux nodes (`pvlan-sw`) lose the settings made with `pvlan`.
+- **Devices that are not listed keep running untouched.** The ones that are listed are recreated. cEOS keeps its saved configuration because `devices/<name>/flash` is a bind mount, so run `write memory` first. Linux nodes (`pvlan-sw`) keep their `pvlan` settings (VLANs, tags, VRFs, IPs, subinterfaces, isolation) because they are saved in `devices/<name>/config` and restored at boot. A Linux node that was started before this feature existed gets a one-time save command printed by the generator.
 - **Interface numbers follow the link numbers, not the order of the lines in the file.** A new link always becomes the next `ethN` on its devices, wherever you put the line.
 - **An interface name can only be used once per device.** The generator stops with an error if two connections use the same one.
 - The cEOS image of the running lab is reused. You are only asked for an image if the lab has no cEOS node yet.

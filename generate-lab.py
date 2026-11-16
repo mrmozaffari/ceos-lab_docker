@@ -451,6 +451,10 @@ def generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run
                 'hostname': device,
                 'labels': {'lab.kind': 'linux'},
                 'environment': linux_env(device, cfg, connections, (ports or {}).get(device)),
+                'volumes': [
+                    {'type': 'bind', 'source': os.path.abspath(os.path.join('devices', device, 'config')),
+                     'target': '/config'},
+                ],
                 'networks': nets,
             }
             continue
@@ -511,13 +515,30 @@ def choose_mode(args):
             sys.exit(0)
 
 
-def print_apply_commands(recreate, gone, removed):
+def print_apply_commands(recreate, gone, removed, old_services=None, linux_nodes=None):
     project = re.sub(r'[^a-z0-9_-]', '', os.path.basename(os.getcwd()).lower())
-    print("👉 Apply the changes to the running lab:")
+    old_services = old_services or {}
+    # running Linux nodes whose settings are not on disk yet (started before the /config mount existed):
+    # their pvlan settings are saved by hand once, before the node is recreated
+    legacy = [d for d in recreate if d in (linux_nodes or {}) and d in old_services
+              and not os.path.isfile(os.path.join('devices', d, 'config', 'pvlan.conf'))]
+    step = 1
+    if legacy:
+        print("👉 Step 1: save the pvlan settings of these running Linux nodes (needed once, no saved config on the host yet):")
+        for d in legacy:
+            print(f"   docker cp pvlan-sw/pvlan {d}:/root/pvlan && docker exec {d} pvlan save"
+                  f" && docker cp {d}:/config/pvlan.conf devices/{d}/config/pvlan.conf")
+        step = 2
+        print(f"\n👉 Step {step}: apply the changes to the running lab:")
+    else:
+        print("👉 Apply the changes to the running lab:")
     print("   docker-compose up -d --remove-orphans" + (" --force-recreate " + " ".join(recreate) if recreate else ""))
     if recreate:
         print("   Devices listed above are recreated: cEOS keeps its saved config (run 'write memory' first),")
-        print("   Linux nodes lose settings made with pvlan. All other devices keep running untouched.")
+        print("   Linux nodes restore their pvlan settings (vlans, vrfs, IPs, tags) from devices/<node>/config.")
+        print("   All other devices keep running untouched.")
+        if any(d in (linux_nodes or {}) for d in recreate):
+            print("   Rebuild the pvlan-sw image first if you have not since the save/restore feature was added.")
     if removed:
         print("\n🧹 Afterwards remove the networks of the deleted links (optional):")
         for o in removed:
@@ -612,12 +633,15 @@ def main():
 
     volume_paths = generate_device_files(devices, connections, dry_run=False,
                                          reset_startup=args.reset_startup, linux_nodes=linux_nodes, ports=ports)
+    for d in devices:
+        if d in linux_nodes:
+            os.makedirs(os.path.join('devices', d, 'config'), exist_ok=True)
     generate_compose(devices, links, mgmt_net, volume_paths, ceos_image, dry_run=False,
                      linux_nodes=linux_nodes, connections=connections, ports=ports)
 
     print("\n✅ docker-compose.yml generated successfully. 🎉\n")
     if mode == 'update':
-        print_apply_commands(recreate, gone, removed)
+        print_apply_commands(recreate, gone, removed, old_services, linux_nodes)
         return
     print("👉 To start your lab:\n   docker-compose up -d\n\n👉 To tear it down:\n   docker-compose down\n")
     show = input("👀 Would you like to see the contents of docker-compose.yml? [y/N]: ").strip().lower()

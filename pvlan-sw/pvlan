@@ -27,6 +27,70 @@ ensure_port() {
   ip link set "$1" up
 }
 
+# ---- saved configuration ----------------------------------------------------------------------------
+# After every change pvlan writes the complete current state to $CONF_DIR/pvlan.conf as a list of
+# pvlan commands. In a lab the folder devices/<name>/config is mounted there, so a recreated container
+# (docker-compose up --force-recreate) reads the file at boot and rebuilds everything: VLANs, tagged and
+# untagged ports, isolation, IPs, per-port subinterfaces, VRFs and gateways.
+CONF_DIR=${PVLAN_CONFIG_DIR:-/config}
+CONF=$CONF_DIR/pvlan.conf
+
+rlabel() {   # ethN -> the label used in the topology file (Ethernet1 ...), or the name itself
+  for kv in $PORT_MAP; do [ "${kv#*=}" = "$1" ] && { echo "${kv%%=*}"; return; }; done
+  echo "$1"
+}
+
+dump_state() {
+  ip -d link show br0 2>/dev/null | grep -q 'vlan_protocol 802.1ad' && echo "proto 802.1ad"
+  vrfs=$(ip -o link show type vrf 2>/dev/null | awk -F': ' '{n=$2; sub(/@.*/,"",n); print n}')
+  for v in $vrfs; do echo "vrf add $v"; done
+  bridge vlan show 2>/dev/null | awk -v map="$PORT_MAP" '
+    BEGIN { n=split(map, kv, " "); for (i=1;i<=n;i++) { split(kv[i], p, "="); lbl[p[2]]=p[1] } }
+    NR==1 || NF==0 { next }
+    { if ($1 ~ /^[0-9]+$/) { vid=$1 } else { port=$1; vid=$2 }
+      if (port=="br0" || vid=="") next
+      name = (port in lbl) ? lbl[port] : port
+      print "vlan add " vid " " name (($0 ~ /Untagged/) ? "" : " --tagged") }'
+  bridge -d link show 2>/dev/null | awk -v map="$PORT_MAP" '
+    BEGIN { n=split(map, kv, " "); for (i=1;i<=n;i++) { split(kv[i], p, "="); lbl[p[2]]=p[1] } }
+    /^[0-9]+:/ { nm=$2; sub(/@.*/,"",nm); sub(/:$/,"",nm) }
+    { for (i=1;i<=NF;i++) if ($i=="isolated" && $(i+1)=="on") print "isolate " ((nm in lbl) ? lbl[nm] : nm) }'
+  ip -o link show type vlan 2>/dev/null | awk '{n=$2; sub(/:$/,"",n); split(n,a,"@"); m=""; for(i=1;i<=NF;i++) if($i=="master") m=$(i+1); print a[1], a[2], m}' |
+  while read nm par mst; do
+    case "$nm" in *.*) ;; *) continue ;; esac
+    vid=${nm##*.}
+    addrs=$(ip -o -4 addr show dev "$nm" 2>/dev/null | awk '{print $4}')
+    [ -z "$addrs" ] && continue
+    vopt=""; for v in $vrfs; do [ "$v" = "$mst" ] && vopt=" --vrf $mst"; done
+    gopt=""
+    if [ -z "$vopt" ]; then
+      g=$(ip -4 route show default dev "$nm" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}')
+      [ -n "$g" ] && gopt=" --gw $g"
+    fi
+    first=1
+    for a in $addrs; do
+      if [ "$par" = "br0" ]; then base="ip $vid $a"; else base="l3 $(rlabel "$par") $vid $a"; fi
+      if [ $first = 1 ]; then echo "$base$vopt$gopt"; else echo "$base$vopt"; fi
+      first=0
+    done
+  done
+  for v in $vrfs; do
+    g=$(ip -4 route show vrf "$v" default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}')
+    [ -n "$g" ] && echo "gw $v $g"
+  done
+}
+
+autosave() {
+  [ -n "$PVLAN_NOSAVE" ] && return 0
+  mkdir -p "$CONF_DIR" 2>/dev/null || return 0
+  [ -f "$CONF" ] && cp "$CONF" "$CONF.prev" 2>/dev/null
+  if dump_state > "$CONF.tmp" 2>/dev/null; then mv "$CONF.tmp" "$CONF"; else rm -f "$CONF.tmp"; fi
+}
+
+# every command that can change the configuration saves the state when it ends
+case "$1" in show|save|restore|help|-h|--help|"") ;; *) MUT=1 ;; esac
+trap '[ -n "$MUT" ] && autosave' EXIT
+
 # ---- VRF support (Linux VRF devices, one routing table each) -------------------------------------
 # A VRF gives an application its own routing table, so two apps can reuse the same subnet
 # and each VRF can have its own optional default gateway.
@@ -95,6 +159,10 @@ pvlan vrf show                              VRFs, their interfaces and default r
 pvlan gw <vrf> <ip>                         optional default gateway for a VRF
 pvlan gw del <vrf>                          remove it again
 pvlan show                                  VLAN membership, isolation state, IPs and VRFs
+pvlan save [--stdout]                       write the current configuration to the saved file (done automatically
+                                            after every change). --stdout only prints it.
+pvlan restore [file]                        rebuild the configuration from the saved file. The container does this
+                                            at boot, so a recreated container comes back configured.
 
 --vrf puts the new IP interface in that VRF (created if missing). --gw adds a default route through that
 gateway, inside the VRF if one is given. Both are optional. Without --vrf nothing changes.
@@ -181,7 +249,7 @@ case "$1" in
     echo 0 > /proc/sys/net/ipv4/ip_forward
     [ -n "$GW" ] && set_gw "$p.$vid" "$VRF" "$GW"
     echo "$p.$vid:"; ip -br addr show "$p.$vid"
-    [ -n "$VRF" ] && echo "VRF $VRF" ;;
+    if [ -n "$VRF" ]; then echo "VRF $VRF"; fi ;;
   ip)
     if [ "$2" = "del" ]; then
       if [ -n "$4" ]; then ip addr del "$4" dev "br0.$3"
@@ -201,7 +269,20 @@ case "$1" in
     ip link set "br0.$vid" up || echo "warning: br0.$vid did not come up"
     [ -n "$GW" ] && set_gw "br0.$vid" "$VRF" "$GW"
     echo "br0.$vid addresses:"; ip -br addr show "br0.$vid"
-    [ -n "$VRF" ] && echo "VRF $VRF" ;;
+    if [ -n "$VRF" ]; then echo "VRF $VRF"; fi ;;
+  save)
+    if [ "$2" = "--stdout" ]; then dump_state
+    else PVLAN_NOSAVE="" autosave; echo "saved to $CONF"; fi ;;
+  restore)
+    f=${2:-$CONF}
+    [ -f "$f" ] || { echo "no saved configuration ($f)"; exit 0; }
+    while IFS= read -r line; do
+      case "$line" in ""|"#"*) continue ;; esac
+      PVLAN_NOSAVE=1 sh "$0" $line >/dev/null || echo "warning: could not restore: pvlan $line"
+    done < "$f"
+    echo "configuration restored from $f" ;;
+  proto) ip link show br0 >/dev/null 2>&1 || ensure_bridge
+         ip link set br0 type bridge vlan_protocol "${2:-802.1Q}" ;;
   vrf)
     case "$2" in
       add)    [ -z "$3" ] && { usage; exit 1; }; vrf_ensure "$3" && ip -br link show "$3" ;;
@@ -215,7 +296,7 @@ case "$1" in
                 ip link set dev "$i" nomaster
                 for a in $addrs; do ip addr replace "$a" dev "$i"; done
               done ;;
-      show|"") "$0" show | sed -n '/^VRFs:/,/^$/p' ;;
+      show|"") MUT=""; "$0" show | sed -n '/^VRFs:/,/^$/p' ;;
       *) usage; exit 1 ;;
     esac ;;
   gw)
