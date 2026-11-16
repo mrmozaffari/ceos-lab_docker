@@ -526,8 +526,9 @@ def print_apply_commands(recreate, gone, removed, old_services=None, linux_nodes
     if legacy:
         print("👉 Step 1: save the pvlan settings of these running Linux nodes (needed once, no saved config on the host yet):")
         for d in legacy:
-            print(f"   docker cp pvlan-sw/pvlan {d}:/root/pvlan && docker exec {d} pvlan save"
-                  f" && docker cp {d}:/config/pvlan.conf devices/{d}/config/pvlan.conf")
+            c = f'$(docker ps -q --filter label=com.docker.compose.project={project} --filter label=com.docker.compose.service={d})'
+            print(f"   c={c}; docker cp pvlan-sw/pvlan $c:/root/pvlan && docker exec $c pvlan save"
+                  f" && docker cp $c:/config/pvlan.conf devices/{d}/config/pvlan.conf")
         step = 2
         print(f"\n👉 Step {step}: apply the changes to the running lab:")
     else:
