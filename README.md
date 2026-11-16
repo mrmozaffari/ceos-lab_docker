@@ -36,6 +36,7 @@ It also detects existing `ceos` Docker images and allows the user to pick one in
     - [🔷  What is `TFA_VERSION=2`?](#--what-is-tfa_version2)
   - [🐳 Run the lab with Docker](#-run-the-lab-with-docker)
     - [🔬🧪 Name of the Lab](#-name-of-the-lab)
+  - [🔁 Change a running lab](#-change-a-running-lab)
   - [🛑 Tear Down the Lab](#-tear-down-the-lab)
   - [🔄 Entropy and cEOS](#-entropy-and-ceos)
     - [Why does entropy matter?](#why-does-entropy-matter)
@@ -233,6 +234,8 @@ connections:
 | `--auto`        | `False`        | Non-interactive mode                      |
 | `--dry-run`     | `False`        | Validate & show actions, no changes      |
 | `--verbose`     | `False`        | Detailed logging                         |
+| `--update`      | `False`        | Change a lab that is already running, see [Change a running lab](#-change-a-running-lab) |
+| `--fresh`       | `False`        | Ignore an existing `docker-compose.yml` and generate everything again |
 | `-h`, `--help`  |                | Show help & exit                         |
 
 ---
@@ -277,6 +280,47 @@ docker-compose up -d
 
 The lab name is the folder name where `docker-compose.yml` resides.  
 You’ll need it for LLDP/MTU fixes.
+
+---
+
+## 🔁 Change a running lab
+
+You can edit the topology file while the lab is running: add a device, add or remove links, or change an interface name. Run the generator again with `--update` (or answer `U` when it finds an existing `docker-compose.yml`):
+
+```bash
+python3 generate-lab.py topology-pvlan.yml --update
+```
+
+The generator reads the current lab from `docker-compose.yml`, keeps every link and subnet that already exists, and only creates, changes or removes what differs. Without `--update` it would pick new subnets for links that are already running, which breaks the running lab.
+
+It prints what it found and the exact command to apply it:
+
+```text
+🔎 Changes compared with the running lab:
+  + link  link07  LEAF1A Ethernet5 <-> LEAF1B Ethernet5   (172.16.6.0/24)
+  + link  link08  LEAF1A Ethernet6 <-> LEAF1B Ethernet6   (172.16.7.0/24)
+  + device LEAF1B
+  ~ device LEAF1A   interfaces changed, it will be recreated
+
+👉 Apply the changes to the running lab:
+   docker-compose up -d --remove-orphans --force-recreate LEAF1B LEAF1A
+```
+
+| Change in the topology file | What happens |
+| --- | --- |
+| New link | A new network and subnet (next free `linkNN`). Both devices on it are recreated. |
+| Same two devices, another interface name | The network and subnet are kept. Both devices are recreated so the new name is applied. |
+| Link removed | The network is no longer in the file. The devices on it are recreated. The command to delete the old network is printed. |
+| New device | Its container and `devices/<name>` folder are created. |
+| Device without any link left | Its container is removed (`--remove-orphans`). Its `devices/<name>` folder is kept. |
+
+Good to know:
+
+- **Devices that are not listed keep running untouched.** The ones that are listed are recreated. cEOS keeps its saved configuration because `devices/<name>/flash` is a bind mount, so run `write memory` first. Linux nodes (`pvlan-sw`) lose the settings made with `pvlan`.
+- **Interface numbers follow the link numbers, not the order of the lines in the file.** A new link always becomes the next `ethN` on its devices, wherever you put the line.
+- **An interface name can only be used once per device.** The generator stops with an error if two connections use the same one.
+- The cEOS image of the running lab is reused. You are only asked for an image if the lab has no cEOS node yet.
+- `--update --dry-run` shows the plan and writes nothing.
 
 ---
 
