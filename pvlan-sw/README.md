@@ -68,6 +68,14 @@ connections:
   - { device1: PVLAN-SW, intf1: Ethernet2, device2: LEAF1A, intf2: Ethernet11 }
 ```
 
+The short way works too. When you only need the default image, just list the names:
+
+```yaml
+linux_nodes: [Host1, Host2, ACI-L1]
+```
+
+Other accepted forms: `Host1:` with nothing after it, or `Host1: pvlan-sw:latest` to give just the image. A node that is listed but has no connection is skipped with a warning, it is not an error.
+
 Generate and start the lab, then open a shell in the node:
 
 ```sh

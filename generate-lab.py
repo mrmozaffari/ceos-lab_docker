@@ -66,6 +66,31 @@ def setup_logging(verbose):
         logging.info("Logging started")
 
 
+def normalize_linux_nodes(topo):
+    """linux_nodes can be written the short way. All of these are the same node with the default image:
+         linux_nodes: [Host1, Host2]          (a list of names)
+         linux_nodes: {Host1: , Host2: }      (names without settings)
+         linux_nodes: {Host1: pvlan-sw:latest} (a name with just an image)
+       or the long way with image/isolated/vlan. Returns {name: settings dict}."""
+    raw = topo.get('linux_nodes') or {}
+    if isinstance(raw, str):
+        raw = [raw]
+    if isinstance(raw, list):
+        raw = {n: None for n in raw}
+    if not isinstance(raw, dict):
+        raise ValueError("'linux_nodes' must be a list of names or a mapping of name to settings")
+    nodes = {}
+    for name, cfg in raw.items():
+        if cfg is None:
+            cfg = {}
+        elif isinstance(cfg, str):
+            cfg = {'image': cfg}
+        elif not isinstance(cfg, dict):
+            raise ValueError(f"linux_nodes '{name}': settings must be a mapping or an image name")
+        nodes[str(name)] = cfg
+    return nodes
+
+
 def validate_topology(topo):
     if not isinstance(topo, dict):
         raise ValueError("Topology file is not a YAML dictionary")
@@ -82,16 +107,12 @@ def validate_topology(topo):
             for (dev, intf), nums in used.items() if len(nums) > 1]
     if dups:
         raise ValueError("duplicate interface, an interface can only be used by one connection: " + "; ".join(dups))
-    linux = topo.get('linux_nodes') or {}
-    if not isinstance(linux, dict):
-        raise ValueError("'linux_nodes' must be a mapping of device name to settings")
-    seen = {c[k] for c in topo['connections'] for k in ('device1', 'device2')}
+    linux = normalize_linux_nodes(topo)
     for name, cfg in linux.items():
-        cfg = cfg or {}
-        if name not in seen:
-            raise ValueError(f"linux_nodes entry '{name}' is not used in any connection")
         labels = [c[i] for c in topo['connections']
                   for d, i in (('device1', 'intf1'), ('device2', 'intf2')) if c[d] == name]
+        if not labels:
+            continue      # not connected: main() warns and leaves it out
         for lbl in cfg.get('isolated', []) or []:
             if lbl not in labels:
                 raise ValueError(f"linux_nodes '{name}': isolated port '{lbl}' is not in its connections")
@@ -527,7 +548,7 @@ def print_apply_commands(recreate, gone, removed, old_services=None, linux_nodes
         print("👉 Step 1: save the pvlan settings of these running Linux nodes (needed once, no saved config on the host yet):")
         for d in legacy:
             c = f'$(docker ps -q --filter label=com.docker.compose.project={project} --filter label=com.docker.compose.service={d})'
-            print(f"   c={c}; docker cp pvlan-sw/pvlan $c:/root/pvlan && docker exec $c pvlan save"
+            print(f"   c={c}; docker cp pvlan-sw/pvlan $c:/root/pvlan && docker exec $c sh -c 'chmod +x /root/pvlan && /root/pvlan save'"
                   f" && docker cp $c:/config/pvlan.conf devices/{d}/config/pvlan.conf")
         step = 2
         print(f"\n👉 Step {step}: apply the changes to the running lab:")
@@ -571,7 +592,11 @@ def main():
 
     mode = choose_mode(args)
     existing_docker_subnets = get_existing_docker_subnets()
-    linux_nodes = topo.get('linux_nodes') or {}
+    linux_nodes = normalize_linux_nodes(topo)
+    seen = {c[k] for c in connections for k in ('device1', 'device2')}
+    for name in [n for n in linux_nodes if n not in seen]:
+        print(f"⚠️  linux node '{name}' has no connection, it is left out. Add a link to it to create it.")
+        del linux_nodes[name]
     old_links = old_services = None
     removed = []
 
