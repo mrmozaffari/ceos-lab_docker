@@ -69,8 +69,6 @@ Generate and start the lab, then open a shell in the node:
 
 ```sh
 python3 generate-lab.py topology-pvlan.yml
-docker-compose up -d
-docker exec -it PVLAN-SW sh
 ```
 
 The container runs `entrypoint.sh` by itself every time it starts. You never run it by hand.
