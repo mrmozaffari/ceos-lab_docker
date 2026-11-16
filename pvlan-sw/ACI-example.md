@@ -4,7 +4,8 @@ This lab uses two `pvlan-sw` containers as ACI style endpoints. Both hosts conne
 
 - a host port that carries **several VLANs** (a trunk), each VLAN with its own IP,
 - a host whose two ports are **isolated** from each other, and
-- a leaf that moves the traffic **without ever creating the customer VLANs** (100, 101, 200, 201) in its own VLAN database.
+- a leaf that moves the traffic **without ever creating the customer VLANs** (100, 101, 200, 201) in its own VLAN database, and
+- **the same VLAN number used by different applications**, like Cisco ACI does when two apps share a VLAN ID on different ports.
 
 For the full command list and troubleshooting, see [README.md](README.md).
 
@@ -23,16 +24,29 @@ For the full command list and troubleshooting, see [README.md](README.md).
 
 In the diagram every host port is shown as a physical interface with the VLANs it carries. The Linux bridge that `pvlan-sw` uses internally is not drawn, so you only see ports, VLANs and IPs.
 
-| Device | Port | VLANs | IP addresses |
+| Device | Port | VLANs | IP addresses (application) |
 | --- | --- | --- | --- |
-| ACI-L1 | Eth1 (trunk) | 100, 101 | 1.1.1.10/24 on VLAN 100, 3.3.3.10/24 on VLAN 101 |
-| ACI-L1 | Eth2 (trunk) | 100 | 2.2.2.10/24 on VLAN 100 |
-| Host2 | Eth1 (trunk) | 100, 101 | 1.1.1.11/24 on VLAN 100, 3.3.3.11/24 on VLAN 101 |
-| Host2 | Eth2 (trunk) | 200 | 2.2.2.11/24 on VLAN 200 |
-| GW | Et1 (trunk) | 100, 101 | 1.1.1.1/24 on VLAN 100, 3.3.3.1/24 on VLAN 101 |
-| GW | Et2 (trunk) | 200, 201 | 2.2.2.1/24 on VLAN 200, 4.4.4.1/24 on VLAN 201 |
+| ACI-L1 | Eth1 (trunk) | 100, 101 | 1.1.1.10/24 on VLAN 100 (APP-1), 3.3.3.10/24 on VLAN 101 (APP-3) |
+| ACI-L1 | Eth2 (trunk) | 100 | 2.2.2.10/24 on VLAN 100 (APP-2) |
+| Host2 | Eth1 (trunk) | 100, 101 | 1.1.1.11/24 on VLAN 100 (APP-1), 3.3.3.11/24 on VLAN 101 (APP-3) |
+| Host2 | Eth2 (trunk) | 200 | 2.2.2.11/24 on VLAN 200 (APP-2) |
+| GW | Et1 (trunk) | 100, 101 | 1.1.1.1/24 on VLAN 100 (APP-1), 3.3.3.1/24 on VLAN 101 (APP-3) |
+| GW | Et2 (trunk) | 200, 201 | 2.2.2.1/24 on VLAN 200 (APP-2), 4.4.4.1/24 on VLAN 201 (APP-4) |
 
-ACI-L1 sends VLAN 100 on **both** of its ports, but the two ports end up in different gateway VLANs (100 and 200). That is the ACI style part: the VLAN number on the host does not have to match the VLAN number on the gateway.
+ACI-L1 sends VLAN 100 on **both** of its ports, but they carry different applications (APP-1 and APP-2) and end up in different gateway VLANs (100 and 200). That is the ACI style part: the VLAN number on the host does not have to match the VLAN number on the gateway.
+
+### Applications and subnets
+
+Each application owns one subnet. The VLAN number is only a tag on a port. The subnet tells you which application the traffic belongs to.
+
+| Application | Subnet | GW VLAN | Carrier VLAN | Where it appears |
+| --- | --- | --- | --- | --- |
+| APP-1 | 1.1.1.0/24 | 100 | 3001 | ACI-L1 Eth1 VLAN 100, Host2 Eth1 VLAN 100 |
+| APP-2 | 2.2.2.0/24 | 200 | 3002 | ACI-L1 Eth2 VLAN 100, Host2 Eth2 VLAN 200 |
+| APP-3 | 3.3.3.0/24 | 101 | 3003 | ACI-L1 Eth1 VLAN 101, Host2 Eth1 VLAN 101 |
+| APP-4 | 4.4.4.0/24 | 201 | 3004 | ACI-L1 Eth2 VLAN 101 (not used yet) |
+
+**APP-1 and APP-2 both use VLAN 100 on ACI-L1.** They are told apart by the port: Eth1 carries APP-1 and Eth2 carries APP-2. On the gateway they become VLAN 100 and VLAN 200. This is the ACI behavior the lab reproduces: one VLAN ID, several applications, and the fabric (here the leaf) keeps them apart.
 
 ### Topology file
 
@@ -132,12 +146,12 @@ The leaf does not create VLAN 100, 101, 200 or 201. It uses **carrier VLANs** (3
 
 ![Carrier VLANs inside LEAF1A: which leaf ports meet in which carrier VLAN](images/aci-example-carrier-vlans.png)
 
-| Carrier VLAN | Host side | GW side | What it connects |
-| --- | --- | --- | --- |
-| 3001 | Et10 VLAN 100 (ACI-L1 Eth1), Et12 VLAN 100 (Host2 Eth1) | Et1 VLAN 100 | The 1.1.1.0/24 network |
-| 3003 | Et10 VLAN 101 (ACI-L1 Eth1), Et12 VLAN 101 (Host2 Eth1) | Et1 VLAN 101 | The 3.3.3.0/24 network |
-| 3002 | Et11 VLAN 100 (ACI-L1 Eth2), Et13 VLAN 200 (Host2 Eth2) | Et2 VLAN 200 | The 2.2.2.0/24 network. ACI-L1 sends VLAN 100, the GW sees VLAN 200. |
-| 3004 | Et11 VLAN 101 (ACI-L1 Eth2, not used yet) | Et2 VLAN 201 | The 4.4.4.0/24 network |
+| Carrier VLAN | Application | Host side | GW side | What it connects |
+| --- | --- | --- | --- | --- |
+| 3001 | APP-1 | Et10 VLAN 100 (ACI-L1 Eth1), Et12 VLAN 100 (Host2 Eth1) | Et1 VLAN 100 | 1.1.1.0/24 |
+| 3003 | APP-3 | Et10 VLAN 101 (ACI-L1 Eth1), Et12 VLAN 101 (Host2 Eth1) | Et1 VLAN 101 | 3.3.3.0/24 |
+| 3002 | APP-2 | Et11 VLAN 100 (ACI-L1 Eth2), Et13 VLAN 200 (Host2 Eth2) | Et2 VLAN 200 | 2.2.2.0/24. ACI-L1 sends VLAN 100, the GW sees VLAN 200. |
+| 3004 | APP-4 | Et11 VLAN 101 (ACI-L1 Eth2, not used yet) | Et2 VLAN 201 | 4.4.4.0/24 |
 
 The leaf uses two techniques.
 
