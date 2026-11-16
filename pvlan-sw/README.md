@@ -9,11 +9,9 @@ What it gives you:
 - **Trunk ports** (tagged VLANs) and an IP on the switch itself, like an SVI.
 - Everything is configured **at runtime** with one command, `pvlan`. VLAN numbers are arguments, nothing is hard coded.
 
-```
- ACI-Fabric (pvlan-sw)            Leaf                     Gateway
- eth1.100 1.1.1.10/24  ------>  Et10 ... Et1  ------>  Vlan100 1.1.1.1/24
- eth2.100 2.2.2.10/24  ------>  Et11 ... Et2  ------>  Vlan200 2.2.2.1/24
-```
+![ACI-Fabric to GW via LEAF1A subinterface paths](images/aci-fabric-to-gw-via-leaf1a.png)
+
+*Path 1 carries VLAN 100 unchanged through carrier VLAN 3001. Path 2 enters as VLAN 100 and leaves as VLAN 200 through carrier VLAN 3002 (coral box). Carrier VLANs exist only inside the leaf.*
 
 ## Contents
 
@@ -33,6 +31,7 @@ What it gives you:
 | --- | --- |
 | `Dockerfile` | Alpine image with `iproute2`, `bridge-utils` and `tcpdump` |
 | `entrypoint.sh` | Runs when the container starts: creates the VLAN-aware bridge `br0` and attaches the data ports |
+| `images/` | Diagrams used in this README |
 | `pvlan` | The command you use inside the container (installed as `/root/pvlan` and `/usr/local/bin/pvlan`) |
 
 ## Build the image
@@ -69,6 +68,8 @@ Generate and start the lab, then open a shell in the node:
 
 ```sh
 python3 generate-lab.py topology-pvlan.yml
+docker-compose up -d
+docker exec -it PVLAN-SW sh
 ```
 
 The container runs `entrypoint.sh` by itself every time it starts. You never run it by hand.
