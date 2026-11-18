@@ -32,7 +32,7 @@ A larger example with two hosts, a trunk, isolation, one leaf and a gateway is i
 
 | File | Purpose |
 | --- | --- |
-| `Dockerfile` | Alpine image with `iproute2`, `bridge-utils` and `tcpdump` |
+| `Dockerfile` | Alpine image with `iproute2`, `bridge-utils`, `tcpdump` and `lldpd` |
 | `entrypoint.sh` | Runs when the container starts: creates the VLAN-aware bridge `br0` and attaches the data ports |
 | `images/` | Diagrams used in this README |
 | `shellrc` | Shell prompt and colors: the hostname in green as the prompt, and colored `ls`, `grep`, `ip` and `bridge` |
@@ -340,6 +340,7 @@ Things to know:
 
 ## Good to know
 
+- **LLDP is on by default.** `lldpd` runs on the data ports (`eth1`, `eth2`, ...), never on `eth0` or `br0`, and announces each port with its topology label (`Ethernet1`). Check the neighbors inside the node with `lldpcli show neighbors`, and on the switch with `show lldp neighbors`. To turn it off for a node, use the long form in the topology file with `lldp: false`. LLDP only crosses the lab links if the Docker host lets the link bridges pass it, see the root README section "Fix LLDP". The image must be rebuilt to get `lldpd`.
 - **The configuration is saved** to `devices/<name>/config/pvlan.conf` and restored when the container is recreated, see [Saved configuration](#saved-configuration). Containers started by hand with `docker run` need `-v <dir>:/config` for this.
 - **Updating the scripts:** a new container made from an old image runs the old scripts. Rebuild the image, or copy a new `pvlan` into a running container with `docker cp pvlan <container>:/root/pvlan`.
 - **Requirements:** a Linux kernel with bridge VLAN filtering and per-port isolation (4.18 or newer), and a privileged container. VRFs also need the `vrf` kernel module on the Docker host.

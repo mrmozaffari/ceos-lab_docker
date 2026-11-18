@@ -347,6 +347,8 @@ def linux_env(device, cfg, connections, ports=None):
     }
     if cfg.get('vlan') is not None:
         env['VLAN'] = str(cfg['vlan'])
+    if cfg.get('lldp') is False:
+        env['LLDP'] = '0'
     return env
 
 

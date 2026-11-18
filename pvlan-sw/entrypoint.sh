@@ -5,6 +5,7 @@
 # Optional env (from the topology file):
 #   PORT_MAP        "Ethernet1=eth1 Ethernet2=eth2 ..." so pvlan accepts topology labels
 #   ISOLATED_PORTS  ports to start in isolated mode (can be changed later with pvlan)
+#   LLDP            set to 0 to not start lldpd (default: started on the data ports)
 #   /config         bind-mounted from devices/<name>/config, holds pvlan.conf so config survives recreate
 #   VLAN            optional: pre-create this VLAN (untagged) on all ports at boot
 PORTS=$(for kv in $PORT_MAP; do echo "${kv#*=}"; done)
@@ -31,6 +32,17 @@ done
 for p in $ISOLATED_PORTS; do
   bridge link set dev "$p" isolated on
 done
+# LLDP on the data ports only (not eth0, not br0). Frames to 01:80:c2:00:00:0e are not forwarded by the
+# bridge, they are delivered to the port itself, so lldpd sees the neighbor on each port. The port ID
+# shown to the neighbor is the topology label (Ethernet1 ...), not eth1.
+if [ "${LLDP:-1}" != "0" ] && command -v lldpd >/dev/null 2>&1; then
+  mkdir -p /run/lldpd
+  lldpd -I "$(echo $PORTS | tr ' ' ',')"
+  for kv in $PORT_MAP; do
+    lldpcli configure ports "${kv#*=}" lldp portidsubtype local "${kv%%=*}" 2>/dev/null
+  done
+fi
+
 # Re-apply the configuration saved by pvlan (vlans, vrfs, IPs, l3 subinterfaces, tags) from /config
 pvlan restore
 [ -n "$VLAN" ] && pvlan vlan add "$VLAN" $PORTS

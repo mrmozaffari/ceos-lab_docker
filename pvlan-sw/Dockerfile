@@ -1,5 +1,5 @@
 FROM alpine:3.20
-RUN apk add --no-cache iproute2 bridge-utils tcpdump
+RUN apk add --no-cache iproute2 bridge-utils tcpdump lldpd
 COPY entrypoint.sh /entrypoint.sh
 # the script lives in root's home, with a symlink so "pvlan" also works from anywhere
 COPY pvlan /root/pvlan
