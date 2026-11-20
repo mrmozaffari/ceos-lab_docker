@@ -23,10 +23,11 @@ A larger example with two hosts, a trunk, isolation, one leaf and a gateway is i
 4. [Command reference](#command-reference)
 5. [Two modes: bridge mode and L3 mode](#two-modes-bridge-mode-and-l3-mode)
 6. [Examples](#examples)
-7. [Matching switch config (Arista cEOS)](#matching-switch-config-arista-ceos)
-8. [Saved configuration](#saved-configuration)
-9. [Troubleshooting](#troubleshooting)
-10. [Good to know](#good-to-know)
+7. [Interactive mode](#interactive-mode)
+8. [Matching switch config (Arista cEOS)](#matching-switch-config-arista-ceos)
+9. [Saved configuration](#saved-configuration)
+10. [Troubleshooting](#troubleshooting)
+11. [Good to know](#good-to-know)
 
 ## Files
 
@@ -92,6 +93,7 @@ Ports can be written as `ethN` or as the labels from the topology file (`Etherne
 
 | Command | What it does |
 | --- | --- |
+| `pvlan -i` | Interactive mode. A menu asks the questions, queues the changes, and applies them when you choose `a`. See [Interactive mode](#interactive-mode). |
 | `pvlan setup <vid> [ports] [--isolate ports] [--tagged] [--ad]` | One shot. Puts the ports in VLAN `<vid>` (all data ports if none given) and isolates the ones listed after `--isolate`. `--tagged` makes them trunk ports. `--ad` uses 802.1ad (0x88a8) for the outer tag. |
 | `pvlan vlan add <vid> <ports> [--tagged]` | Add a VLAN to ports. Untagged (access) by default, tagged with `--tagged`. |
 | `pvlan vlan del <vid> <ports>` | Remove a VLAN from ports. |
@@ -108,7 +110,10 @@ Ports can be written as `ethN` or as the labels from the topology file (`Etherne
 | `pvlan vrf show` | List the VRFs, their interfaces and default routes. |
 | `pvlan gw <vrf> <ip>` | Set an optional default gateway for a VRF. |
 | `pvlan gw del <vrf>` | Remove it again. |
-| `pvlan show` | Show VLAN membership, IP interfaces, VRFs and isolation state. |
+| `pvlan qinq add <uplink> <outer> <port>...` | Q-in-Q tunnel. Frames from the ports, with any inner tags (for example VLAN 100), leave the uplink with the outer tag `<outer>` added, and come back with it removed. Each outer tag is its own bridge, so tunnels cannot mix. The ports and the uplink leave `br0`. |
+| `pvlan qinq del <outer>` | Remove the tunnel. Its ports go back to `br0`, and so does the uplink when no other tunnel uses it. |
+| `pvlan qinq show` | List the tunnels. |
+| `pvlan show` | Show VLAN membership, IP interfaces, VRFs, Q-in-Q tunnels and isolation state. |
 | `pvlan save [--stdout]` | Write the current configuration to the saved file. This already happens after every change, so you rarely need it. `--stdout` only prints it. |
 | `pvlan restore [file]` | Rebuild the configuration from the saved file. The container runs this at boot. |
 
@@ -237,6 +242,68 @@ pvlan vrf attach APP-3 br0.300               # move another interface in
 pvlan gw del APP-3                           # remove the gateway again
 ```
 
+### 8. Q-in-Q tunnel: the same inner VLAN for two apps, separated by an outer tag
+
+Two apps both use VLAN 100 on their hosts. The switch adds a different outer tag per app, so the upstream switch can map each outer/inner pair to its own VLAN (similar to how ACI can reuse the same VLAN ID for different apps).
+
+| Port | Role |
+| --- | --- |
+| Ethernet3 | Host of APP-A, sends VLAN 100 |
+| Ethernet4 | Host of APP-B, sends VLAN 100 |
+| Ethernet1 | Uplink to the Arista leaf |
+
+```sh
+pvlan qinq add Ethernet1 10 Ethernet3     # APP-A: outer 10, inner 100
+pvlan qinq add Ethernet1 20 Ethernet4     # APP-B: outer 20, inner 100
+pvlan qinq show
+```
+
+On the wire, the uplink carries `outer 10 / inner 100` for APP-A and `outer 20 / inner 100` for APP-B. The outer tag uses the normal 0x8100 ethertype in both directions. The hosts just send tagged VLAN 100, for example `pvlan l3 Ethernet1 100 1.1.1.12/24 --gw 1.1.1.1`.
+
+Matching leaf config on the Arista side (double VLAN translation, outer and inner pair to one bridging VLAN):
+
+```
+vlan 3000
+vlan 3001
+interface Ethernet10
+   switchport mode trunk
+   switchport vlan translation 10 inner 100 3000
+   switchport vlan translation 20 inner 100 3001
+```
+
+Check with `show vlan translation` and `show mac address-table vlan 3000` on the leaf, and `tcpdump -e -nn -i eth1` on the switch node. Notes:
+
+- Why not `pvlan setup ... --ad` (example 5)? That mode sends the outer tag as 0x88a8 and only accepts 0x88a8 coming back. An Arista port answers with 0x8100, so the bridge drops the replies. The tunnel command uses 0x8100 both ways and works with the default TPID.
+- Double VLAN translation depends on the platform and EOS release, and may not be supported on cEOS. Check your release notes.
+- The double tag adds 8 bytes to the frame. Raise the MTU on the path if large frames are dropped.
+- The tunnel is saved in `pvlan.conf` and restored when the container is recreated.
+
+## Interactive mode
+
+If you do not want to remember the commands, run `pvlan -i` inside the node (`docker exec -it <node> pvlan -i`). It shows a menu, asks one question at a time, checks the answers (VLAN numbers, port names, IPs, VRF names), and queues the result. Nothing changes until you choose `a` to review and apply the queue.
+
+```
+Ports: Ethernet1 Ethernet2 Ethernet3 Ethernet4      Queued changes: 0
+ 1) VLAN on ports (access or trunk)
+ 2) Port with its own IP (tagged subinterface)
+ 3) IP on the switch itself in a VLAN
+ 4) Q-in-Q tunnel (add an outer tag)
+ 5) VRF and gateway
+ 6) Port isolation
+ 7) Outer tag type of the bridge (802.1Q or 802.1ad)
+ 8) Remove something
+ s) Show the current configuration
+ a) Review and apply the queued changes
+ q) Quit
+```
+
+Example: choose `4`, answer `Ethernet1` (uplink), `10` (outer VLAN), `Ethernet3` (host port). It queues `pvlan qinq add Ethernet1 10 Ethernet3`. Choose `a`, check the list of commands it will run, answer `y`, and it applies them and saves the result like any other `pvlan` command.
+
+- Type `x` at any question to cancel that action. A blank answer takes the default shown in `[brackets]`.
+- Quitting with queued changes asks whether to apply or discard them.
+- The queue is a list of normal `pvlan` commands, so what you see is what runs. You can copy them into your notes.
+- It needs a terminal (`-it`). Without one it exits with a hint.
+
 ## Matching switch config (Arista cEOS)
 
 Example for the lab in the diagram above. The leaf never needs VLAN 100 or 200 in its own VLAN database. It uses L2 subinterface pairs that share a **carrier VLAN** (3001, 3002). The tag is rewritten on path 2 because the two subinterfaces in the pair use different dot1q tags.
@@ -308,6 +375,7 @@ Every change made with `pvlan` is written to `/config/pvlan.conf` as a plain lis
 - port isolation
 - IPs on `br0.<vid>` and the per-port subinterfaces `ethN.<vid>`
 - VRFs, the interfaces in them, and their default gateways
+- Q-in-Q tunnels (`pvlan qinq`)
 
 Example of the file (you can read and edit it):
 

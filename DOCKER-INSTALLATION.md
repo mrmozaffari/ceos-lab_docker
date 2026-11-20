@@ -1,4 +1,4 @@
-# 🐳 Downgrade Docker to 24.0.6 on Ubuntu
+# 🐳 Docker 24.0.6 for the cEOS Lab on Ubuntu
 
 The lab can misbehave with later versions of Docker and Docker Compose.
 
@@ -10,7 +10,9 @@ Newer releases (for example Docker Engine 28.x with Compose 2.35.x) attach a con
 | containerd.io | 1.6.24-1 |
 | Docker Compose | 2.22.0 (standalone `docker-compose` command) |
 
-Tested on Ubuntu 20.04 (focal) with kernel 5.4.164. Install the kernel first (see `KERNEL_INSTALLATION.md`).
+Verified on Ubuntu 20.04 and Ubuntu 24.04, both with kernel 5.4.164. Install the kernel first (see `KERNEL_INSTALLATION.md`).
+
+Run everything as root (`sudo -i`) and in **one terminal session**, because some steps set variables that later steps use.
 
 ---
 
@@ -20,7 +22,7 @@ Skip this step on a fresh machine.
 
 ```bash
 cd <your lab folder>
-docker compose down        # or: docker-compose down
+docker-compose down        # or: docker compose down
 
 # Save the cEOS image so you can restore it if anything goes wrong
 docker image ls
@@ -37,73 +39,74 @@ An earlier setup may have put the Docker packages on hold, which blocks the down
 (`E: Held packages were changed and -y was used without --allow-change-held-packages`).
 
 ```bash
-sudo systemctl stop docker docker.socket
-sudo apt-mark unhold docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl stop docker docker.socket
+apt-mark unhold docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin
 ```
+
+On a fresh machine, `Unit docker.service not loaded` and `Unable to locate package` errors here are harmless.
 
 ---
 
-## 📦 Step 2: Set Up the Docker APT Repository (If Not Already Done)
+## 📦 Step 2: Set Up the Docker APT Repository
 
 ```bash
-sudo apt update
-sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
+apt update
+apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
 
 # Add Docker's official GPG key
-sudo mkdir -p /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-  sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
 
 # Add Docker's repository
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-  https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
 
-sudo apt update
+apt update
 ```
 
 ---
 
-## 🔍 Step 3: Find the Available Versions
+## 🔍 Step 3: Pick the Right 24.0.6 Build
 
-The version strings depend on your Ubuntu release (`focal` = 20.04, `jammy` = 22.04). Set them once and reuse them in the next step:
+The version strings depend on your Ubuntu release (`focal` = 20.04, `jammy` = 22.04, `noble` = 24.04). Docker publishes 24.0.6 for 20.04 and 22.04, but not for 24.04. On 24.04, use the 22.04 (`jammy`) packages. They install and run correctly there, but this is not an officially supported combination.
+
+This block uses your own release when 24.0.6 exists for it, and falls back to `jammy` otherwise:
 
 ```bash
 CODENAME=$(lsb_release -cs)
 REL=$(lsb_release -rs)
+
+if ! apt-cache madison docker-ce | grep -q "5:24.0.6-1~ubuntu.${REL}~${CODENAME}"; then
+  echo "No 24.0.6 build for ${CODENAME}: using the jammy (22.04) packages"
+  sed -i "s/${CODENAME}/jammy/" /etc/apt/sources.list.d/docker.list
+  apt update
+  CODENAME=jammy; REL=22.04
+fi
+
 SUFFIX="~ubuntu.${REL}~${CODENAME}"
-
+echo "using: ${SUFFIX}"
 apt-cache madison docker-ce | grep 24.0.6
-apt-cache madison containerd.io | grep 1.6.2
+apt-cache madison containerd.io | grep 1.6.24
 ```
 
-You should see a line similar to this (on Ubuntu 20.04):
-
-```
- docker-ce | 5:24.0.6-1~ubuntu.20.04~focal | https://download.docker.com/linux/ubuntu focal/stable amd64 Packages
-```
-
-If `24.0.6` does not appear, the repository from Step 2 is missing or does not match your Ubuntu release.
+Both `madison` lines must print something. If either is empty, stop here.
 
 ---
 
 ## ⬇️ Step 4: Install Docker 24.0.6
 
-This downgrades in place and keeps your existing images. `--allow-downgrades` is required when a newer version is installed.
+This downgrades in place and keeps your existing images. `--allow-downgrades` is required when a newer version is installed. Pin **every** package, including `docker-ce-rootless-extras`, which otherwise installs at the newest version.
 
 ```bash
-sudo apt-get install -y --allow-downgrades \
+apt-get install -y --allow-downgrades \
   docker-ce=5:24.0.6-1${SUFFIX} \
   docker-ce-cli=5:24.0.6-1${SUFFIX} \
+  docker-ce-rootless-extras=5:24.0.6-1${SUFFIX} \
   containerd.io=1.6.24-1 \
   docker-buildx-plugin=0.11.2-1${SUFFIX} \
   docker-compose-plugin=2.21.0-1${SUFFIX}
 
-sudo systemctl start docker
+systemctl enable --now docker
 ```
-
-> If `containerd.io=1.6.24-1` is not offered for your release, pick the closest 1.6.x version from the `apt-cache madison containerd.io` output.
 
 ---
 
@@ -112,7 +115,7 @@ sudo systemctl start docker
 Without this, a routine `apt upgrade` can move Docker back to a version that breaks the lab.
 
 ```bash
-sudo apt-mark hold docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+apt-mark hold docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
 ---
@@ -122,9 +125,9 @@ sudo apt-mark hold docker-ce docker-ce-cli containerd.io docker-buildx-plugin do
 The lab host that is known to work uses the standalone Compose v2.22.0 binary, run as `docker-compose` (with the hyphen). Install the same one:
 
 ```bash
-sudo curl -L https://github.com/docker/compose/releases/download/v2.22.0/docker-compose-linux-x86_64 \
+curl -L https://github.com/docker/compose/releases/download/v2.22.0/docker-compose-linux-x86_64 \
   -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
 ```
 
 > From here on, start and stop the lab with `docker-compose up -d` and `docker-compose down`.
@@ -141,6 +144,8 @@ docker -v
 docker-compose version
 # Docker Compose version v2.22.0
 
+dpkg -l | grep -E 'docker|containerd' | awk '{print $2, $3}'
+docker run --rm hello-world | head -3
 docker image ls
 ```
 
@@ -152,9 +157,38 @@ docker load -i ~/ceos64-backup.tar.gz
 
 ---
 
-## 🌐 Step 8: Management Network and Interface Order Check
+## 🖥️ Step 8: Host Requirements for cEOS
 
-Each cEOS node needs its management interface (`eth0`, Management1) on the network that reaches your LAN. In this lab that is a macvlan network on the host's physical NIC. Create it **before** starting the lab. Replace the values with your own LAN details:
+Check these before starting the lab. Each one has caused a cEOS node to boot only halfway.
+
+```bash
+# 1. IPv6 must be enabled in the kernel
+tr ' ' '\n' < /proc/cmdline | grep -E 'ipv6|cgroup' || echo "no ipv6/cgroup options"
+[ -d /proc/sys/net/ipv6 ] && echo "IPv6 enabled" || echo "IPv6 DISABLED (remove ipv6.disable=1, see KERNEL_INSTALLATION.md Step 4)"
+
+# 2. Kernel modules
+for m in overlay macvlan br_netfilter veth; do modprobe -n -v $m >/dev/null 2>&1 && echo "$m ok" || echo "$m MISSING"; done
+
+# 3. cgroup version
+docker info --format 'cgroup={{.CgroupVersion}}/{{.CgroupDriver}}'
+```
+
+- **IPv6** must be on. With `ipv6.disable=1` on the kernel command line, the cEOS nodes start only partly (see Troubleshooting).
+- **cgroup.** The working lab hosts (Ubuntu 20.04) use cgroup v1 with the `cgroupfs` driver. Ubuntu 24.04 defaults to cgroup v2. The lab was verified on 24.04 running cgroup v1; cgroup v2 was not tested with cEOS. To match the working hosts on 24.04:
+
+  ```bash
+  sed -i 's/^GRUB_CMDLINE_LINUX="/GRUB_CMDLINE_LINUX="systemd.unified_cgroup_hierarchy=0 /' /etc/default/grub
+  update-grub && reboot
+  docker info --format '{{.CgroupVersion}}'     # should print 1
+  ```
+
+---
+
+## 🌐 Step 9: Management Network and Interface Order Check
+
+Each cEOS node needs its management interface (`eth0`, Management1) on the network that reaches your LAN. In this lab that is a macvlan network on the host's physical NIC, named `a-135`. It must exist **before** the lab starts.
+
+> If your lab folder has `mgmt_network.py` and `SETUP_MANAGEMENT_NETWORK.md`, use that procedure to create the network. The manual commands below are for labs without such a script.
 
 ```bash
 docker network create -d macvlan \
@@ -165,7 +199,9 @@ docker network create -d macvlan \
   a-135
 ```
 
-- `parent` is the host NIC that is connected to the LAN (check with `ip -br addr`).
+Replace the values with your own LAN details:
+
+- `parent` is the host NIC that is connected to the LAN (check with `ip -br addr`, for example `ens3` or `enp3s0`).
 - `--ip-range` limits the placeholder addresses Docker hands out, so they never collide with real hosts. It needs at least as many addresses as you have nodes (a /27 holds 30). Keep the management IPs you configure inside EOS outside this block.
 - With a macvlan network, the Docker host itself cannot reach the containers' management addresses. Other machines on the LAN can.
 
@@ -179,7 +215,7 @@ for c in $(docker ps --format '{{.Names}}'); do
 done
 ```
 
-Every line must end in `eth0@if<N>`, where N is the index of the parent NIC (for example `eth0@if2` when the parent is `ens3`, which you can see with `ip -o link`). A large number means `eth0` is on a bridge link network instead, and the interface order is wrong.
+Every line must end in `eth0@if<N>`, where N is the index of the parent NIC (usually 2, which you can confirm with `ip -o link`). A large number means `eth0` is on a bridge link network instead, and the interface order is wrong.
 
 To compare the order for one node:
 
@@ -193,22 +229,54 @@ docker inspect $C --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {
 
 ---
 
+## 🩺 Step 10: Health Check of a Running Node
+
+Give the nodes a minute or two to boot, then check one of them:
+
+```bash
+C=<container name>
+docker exec $C systemctl --failed
+docker exec $C ip -br addr
+docker exec $C ip -br link | grep -E 'cpu|fabric|fwd0|mirror'
+```
+
+and in the EOS CLI: `show interfaces status`.
+
+A **healthy** node looks like this:
+
+- `systemctl --failed` lists nothing.
+- The `eth1` and higher interfaces have **no IP address**. Docker assigns addresses on every network when the container starts, and EOS removes them from the Ethernet ports once it takes them over.
+- The extra devices `cpu`, `fabric`, `fabric1` to `fabric3`, `fwd0` and `mirror0` to `mirror3` exist.
+- The Ethernet ports show `connected` or `notconnect`, never `unknown`.
+
+---
+
 ## 🛠️ Troubleshooting
 
 **`E: Held packages were changed and -y was used without --allow-change-held-packages`**
 The packages are on hold. Run the `apt-mark unhold` command from Step 1, install, then hold them again (Step 5).
 
 **`Version '5:24.0.6-...' was not found`**
-The repository is missing, or the version string does not match your Ubuntu release. Re-run Step 2 and check Step 3.
+The repository is missing, or the version string does not match your Ubuntu release. Re-run Steps 2 and 3. On Ubuntu 24.04 the `jammy` fallback in Step 3 is required.
 
 **Docker does not start after the downgrade**
-Run `sudo journalctl -u docker -n 50 --no-pager` and read the last error. A leftover `/etc/docker/daemon.json` from a newer setup is a common cause.
+Run `journalctl -u docker -n 50 --no-pager` and read the last error. A leftover `/etc/docker/daemon.json` from a newer setup is a common cause.
+
+**Ethernet ports show `unknown`, and the Docker addresses stay on `eth1` and higher**
+The node booted only halfway: EOS never took over the ports. Typical signs inside the container:
+
+- `systemctl --failed` lists `EosPreloadPy.service` (exit status `209/STDOUT`).
+- `rsyslog.service` restarts in a loop (`/var/log/messages` is full of it).
+- `show processes | include Etba|Sfe` shows no forwarding agent.
+- `ifconfig` shows no `cpu`, `fabric` or `fwd0` devices, and `lo` has no `inet6 ::1`.
+
+The cause found in this lab was **IPv6 disabled in the host kernel** (`ipv6.disable=1` on the kernel command line, common on hardened images). Remove it as described in `KERNEL_INSTALLATION.md` Step 4, reboot, and run `docker-compose up -d` again. Other differences worth ruling out, in this order: the cEOS image version compared with the working lab (`docker exec <node> cat /etc/Eos-release`), the cgroup version (Step 8), and available memory.
 
 **A container stays in `Created` and `docker start` says `no available IPv4 addresses on this network's address pools`**
-The management network ran out of addresses. A small subnet or a narrow `--ip-range` cannot hold all the nodes. Take the lab down (`docker-compose down`), remove the network (`docker network rm a-135`), and recreate it with a larger range as in Step 8.
+The management network ran out of addresses. A small subnet or a narrow `--ip-range` cannot hold all the nodes. Take the lab down (`docker-compose down`), remove the network (`docker network rm a-135`), and recreate it with a larger range as in Step 9.
 
 **Management1 cannot reach the gateway (ARP stays incomplete)**
-First check the interface order from Step 8. If `eth0` is correct, the hypervisor may be dropping frames from the containers' extra MAC addresses. On VMware, enable promiscuous mode and forged transmits for the VM's port group. On other platforms, disable port security or MAC filtering for that vNIC. As a fallback, create the network with `-d ipvlan -o ipvlan_mode=l2` instead of macvlan, which reuses the host's MAC.
+First check the interface order from Step 9. If `eth0` is correct, the hypervisor may be dropping frames from the containers' extra MAC addresses. On VMware, enable promiscuous mode and forged transmits for the VM's port group. On other platforms, disable port security or MAC filtering for that vNIC. As a fallback, create the network with `-d ipvlan -o ipvlan_mode=l2` instead of macvlan, which reuses the host's MAC.
 
 **`eth0` is on the wrong network even with these versions**
 Pin the order explicitly in `docker-compose.yml` so it no longer depends on the Docker or Compose version. Use the map form for each service's networks, with the management network first and the highest priority:
@@ -223,6 +291,9 @@ Pin the order explicitly in `docker-compose.yml` so it no longer depends on the 
         priority: 998
 ```
 
+**`docker-ce-rootless-extras` shows a newer version than the other packages**
+It was not pinned. Reinstall it with the same suffix as the others (`apt-get install --allow-downgrades docker-ce-rootless-extras=5:24.0.6-1${SUFFIX}`) and hold it (Step 5).
+
 ---
 
 ## 🧹 Optional: Clean Reinstall
@@ -230,10 +301,10 @@ Pin the order explicitly in `docker-compose.yml` so it no longer depends on the 
 If the in-place downgrade fails and you do not need the existing containers or images (you can restore images from the Step 0 backup), remove Docker completely and start over from Step 2:
 
 ```bash
-sudo apt-mark unhold docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo apt remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo apt purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo rm -rf /var/lib/docker
+apt-mark unhold docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin
+apt remove -y docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin
+apt purge -y docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin
+rm -rf /var/lib/docker
 ```
 
 > ⚠️ This deletes every image, container, network and volume on the host.

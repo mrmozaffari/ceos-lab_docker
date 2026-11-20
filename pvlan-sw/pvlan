@@ -20,7 +20,13 @@ ensure_bridge() {
   fi
   ip link set br0 up
 }
+# a port that belongs to a Q-in-Q tunnel (host port, or an uplink carrying a tunnel) must not be pulled back into br0
+in_qinq() {
+  ip -o link show "$1" 2>/dev/null | grep -q "master qinq" && return 0
+  ip -o link show 2>/dev/null | grep -q " $1\.[0-9]*@$1:.* master qinq"
+}
 ensure_port() {
+  if in_qinq "$1"; then echo "error: $1 is part of a Q-in-Q tunnel (see: pvlan qinq show). Remove it with: pvlan qinq del <outer>"; return 1; fi
   ensure_bridge
   ip addr flush dev "$1" 2>/dev/null
   ip link set "$1" master br0 || echo "warning: could not attach $1 to br0"
@@ -38,6 +44,20 @@ CONF=$CONF_DIR/pvlan.conf
 rlabel() {   # ethN -> the label used in the topology file (Ethernet1 ...), or the name itself
   for kv in $PORT_MAP; do [ "${kv#*=}" = "$1" ] && { echo "${kv%%=*}"; return; }; done
   echo "$1"
+}
+
+# ---- Q-in-Q tunnels --------------------------------------------------------------------------------
+# One transparent bridge per outer tag (qinq<outer>) holds the host ports and a VLAN device <uplink>.<outer>.
+# The VLAN device adds / removes the outer tag (0x8100), the inner tags pass through untouched.
+qinq_list() {   # one line per tunnel: <bridge> <uplink> <outer> <host ports...>
+  ip -o link show type bridge 2>/dev/null | awk -F': ' '{n=$2; sub(/@.*/,"",n); print n}' | grep '^qinq[0-9][0-9]*$' |
+  while read b; do
+    outer=${b#qinq}; up=""; hosts=""
+    for m in $(ip -o link show master "$b" 2>/dev/null | awk -F': ' '{n=$2; sub(/@.*/,"",n); print n}'); do
+      case "$m" in *".$outer") up=${m%.*} ;; *) hosts="$hosts $m" ;; esac
+    done
+    echo "$b $up $outer$hosts"
+  done
 }
 
 dump_state() {
@@ -74,10 +94,16 @@ dump_state() {
       first=0
     done
   done
+  qinq_list | while read b up outer hosts; do
+    line="qinq add $(rlabel "$up") $outer"
+    for h in $hosts; do line="$line $(rlabel "$h")"; done
+    echo "$line"
+  done
   for v in $vrfs; do
     g=$(ip -4 route show vrf "$v" default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}')
     [ -n "$g" ] && echo "gw $v $g"
   done
+  return 0
 }
 
 autosave() {
@@ -88,7 +114,7 @@ autosave() {
 }
 
 # every command that can change the configuration saves the state when it ends
-case "$1" in show|save|restore|help|-h|--help|"") ;; *) MUT=1 ;; esac
+case "$1" in show|save|restore|help|-h|--help|-i|interactive|"") ;; *) MUT=1 ;; esac
 trap '[ -n "$MUT" ] && autosave' EXIT
 
 # ---- VRF support (Linux VRF devices, one routing table each) -------------------------------------
@@ -132,6 +158,8 @@ parse_opts() {
 
 usage() {
 cat <<U
+pvlan -i                                    interactive mode: a menu that asks questions, queues the changes and
+                                            applies them when you say so (also: pvlan interactive)
 pvlan setup <vid> [<port>...] [--isolate <port>...] [--tagged] [--ad]
                                             one shot: put ports in VLAN <vid> (all data ports if none
                                             given) and isolate the ones after --isolate
@@ -158,7 +186,13 @@ pvlan vrf detach <iface>...                 move interfaces back to the default 
 pvlan vrf show                              VRFs, their interfaces and default routes
 pvlan gw <vrf> <ip>                         optional default gateway for a VRF
 pvlan gw del <vrf>                          remove it again
-pvlan show                                  VLAN membership, isolation state, IPs and VRFs
+pvlan qinq add <uplink> <outer> <port>...   Q-in-Q tunnel: frames from the ports (with any inner tags, e.g. VLAN 100)
+                                            leave the uplink with the outer tag <outer> added, and come back with
+                                            it removed. Every outer tag is its own bridge, so tunnels cannot mix.
+                                            The ports and the uplink leave the main bridge br0.
+pvlan qinq del <outer>                      remove the tunnel, its ports go back to br0
+pvlan qinq show                             list the tunnels
+pvlan show                                  VLAN membership, isolation state, IPs, VRFs and Q-in-Q tunnels
 pvlan save [--stdout]                       write the current configuration to the saved file (done automatically
                                             after every change). --stdout only prints it.
 pvlan restore [file]                        rebuild the configuration from the saved file. The container does this
@@ -187,7 +221,193 @@ Note: isolation is per port in the Linux kernel, not per VLAN.
 U
 }
 
+# ---- interactive mode (pvlan -i) -------------------------------------------------------------------
+is_num()    { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
+valid_vid() { is_num "$1" && [ "$1" -ge 1 ] && [ "$1" -le 4094 ]; }
+valid_ip()  { echo "$1" | awk -F. 'NF==4 { for (i=1;i<=4;i++) if ($i !~ /^[0-9]+$/ || $i+0 > 255) exit 1; exit 0 } { exit 1 }'; }
+valid_addr(){ case "$1" in */*) valid_ip "${1%/*}" && is_num "${1#*/}" && [ "${1#*/}" -le 32 ] ;; *) return 1 ;; esac; }
+valid_name(){ echo "$1" | grep -Eq '^[A-Za-z0-9_-]{1,15}$'; }
+
+ask() {        # ask "question" [default]  ->  $A   (blank answer = the default)
+  if [ -n "$2" ]; then printf '%s [%s]: ' "$1" "$2"; else printf '%s: ' "$1"; fi
+  if ! IFS= read -r A; then echo; echo "(input closed, leaving without applying anything that is still queued)"; exit 0; fi
+  [ -z "$A" ] && A=$2
+  return 0
+}
+# the get_* helpers repeat the question until the answer is valid, "x" cancels (return 1)
+get_vid() {
+  while :; do ask "$1 (x = cancel)" "$2"
+    [ "$A" = "x" ] && return 1
+    valid_vid "$A" && return 0; echo "  please enter a number from 1 to 4094"; done
+}
+get_addr() {
+  while :; do ask "$1, like 10.0.0.10/24 (x = cancel)" "$2"
+    [ "$A" = "x" ] && return 1
+    valid_addr "$A" && return 0; echo "  please enter an IPv4 address with a prefix length, like 10.0.0.10/24"; done
+}
+get_optional_ip() {   # blank = none
+  while :; do ask "$1 (blank = none, x = cancel)" ""
+    [ "$A" = "x" ] && return 1
+    [ -z "$A" ] && return 0
+    valid_ip "$A" && return 0; echo "  please enter an IPv4 address like 10.0.0.1"; done
+}
+get_optional_vrf() {
+  while :; do ask "VRF name (blank = none, x = cancel)" ""
+    [ "$A" = "x" ] && return 1
+    [ -z "$A" ] && return 0
+    valid_name "$A" && return 0; echo "  letters, digits, - and _ only, up to 15 characters"; done
+}
+get_ports() {   # one or more ports -> $P
+  while :; do ask "$1 (x = cancel)" "$2"
+    [ "$A" = "x" ] && return 1
+    P=""; bad=""
+    for t in $(echo "$A" | tr ',' ' '); do
+      if ip link show "$(resolve "$t")" >/dev/null 2>&1; then P="$P $t"; else bad="$bad $t"; fi
+    done
+    P=${P# }
+    [ -n "$P" ] && [ -z "$bad" ] && return 0
+    echo "  not a port:${bad:- (nothing entered)}. Ports are: $IPORTS"; done
+}
+get_port() {    # exactly one port -> $P
+  while :; do get_ports "$1" "$2" || return 1
+    [ "$(echo "$P" | wc -w)" = 1 ] && return 0; echo "  please enter just one port"; done
+}
+queue() { echo "$*" >> "$IQ"; echo "  queued: pvlan $*"; }
+
+act_vlan() {
+  echo; echo "VLAN on ports. Access = untagged (the host sends no tag), trunk = tagged (the host sends the tag)."
+  get_vid "VLAN id" || return
+  vid=$A
+  get_ports "Ports, separated by spaces" || return
+  pl=$P
+  ask "Access (untagged) or trunk (tagged)? [a/t]" "a"
+  case "$A" in t|T) queue "vlan add $vid $pl --tagged" ;; *) queue "vlan add $vid $pl" ;; esac
+  ask "Isolate these ports from each other? [y/n]" "n"
+  case "$A" in y|Y) queue "isolate $pl" ;; esac
+}
+act_l3() {
+  echo; echo "Port with its own IP: creates <port>.<vlan> with the address. The port leaves the bridge."
+  get_port "Port" || return;            p=$P
+  get_vid "VLAN id (the tag the host side sends)" || return;   vid=$A
+  get_addr "Address" || return;         ad=$A
+  get_optional_vrf || return;           vr=$A
+  get_optional_ip "Default gateway" || return;   gw=$A
+  cmd="l3 $p $vid $ad"; [ -n "$vr" ] && cmd="$cmd --vrf $vr"; [ -n "$gw" ] && cmd="$cmd --gw $gw"
+  queue "$cmd"
+}
+act_ip() {
+  echo; echo "IP on the switch itself in a VLAN (like an SVI): the interface is br0.<vlan>."
+  get_vid "VLAN id" || return;          vid=$A
+  get_addr "Address" || return;         ad=$A
+  get_optional_vrf || return;           vr=$A
+  get_optional_ip "Default gateway" || return;   gw=$A
+  cmd="ip $vid $ad"; [ -n "$vr" ] && cmd="$cmd --vrf $vr"; [ -n "$gw" ] && cmd="$cmd --gw $gw"
+  queue "$cmd"
+}
+act_qinq() {
+  echo; echo "Q-in-Q tunnel: frames from the host ports (with their VLAN tag, e.g. 100) leave the uplink with an"
+  echo "outer tag added, and come back with it removed. One outer tag per application."
+  get_port "Uplink port (toward the Arista switch)" || return;   up=$P
+  get_vid "Outer VLAN id" || return;     outer=$A
+  get_ports "Host ports for this tunnel, separated by spaces" || return;   hp=$P
+  queue "qinq add $up $outer $hp"
+}
+act_vrf() {
+  echo; echo "VRF: a separate routing table, so two apps can use the same subnet."
+  echo " 1) Create a VRF      2) Set a default gateway in a VRF      3) Move interfaces into a VRF"
+  ask "Choose (x = cancel)" ""
+  case "$A" in
+    1) ask "VRF name" ""; valid_name "$A" && queue "vrf add $A" || echo "  not a valid name" ;;
+    2) ask "VRF name" ""; v=$A; valid_name "$v" || { echo "  not a valid name"; return; }
+       get_optional_ip "Gateway" || return; [ -n "$A" ] && queue "gw $v $A" ;;
+    3) ask "VRF name" ""; v=$A; valid_name "$v" || { echo "  not a valid name"; return; }
+       ask "Interfaces, like eth1.100 br0.100" ""; [ -n "$A" ] && queue "vrf attach $v $A" ;;
+  esac
+}
+act_isolate() {
+  echo; echo "Isolation: isolated ports cannot talk to other isolated ports (the gateway port stays open)."
+  ask "Isolate or open? [i/o]" "i"; m=$A
+  get_ports "Ports" || return
+  case "$m" in o|O) queue "open $P" ;; *) queue "isolate $P" ;; esac
+}
+act_proto() {
+  echo; echo "Outer tag type of the bridge. 802.1Q (default) is what almost everything uses."
+  ask "802.1Q or 802.1ad? [Q/ad]" "Q"
+  case "$A" in ad|AD|802.1ad) queue "proto 802.1ad" ;; *) queue "proto 802.1Q" ;; esac
+}
+act_remove() {
+  echo; echo " 1) VLAN from ports   2) Port IP interface   3) Switch IP (br0.<vlan>)"
+  echo " 4) Q-in-Q tunnel     5) VRF                 6) VRF gateway"
+  ask "Choose (x = cancel)" ""
+  case "$A" in
+    1) get_vid "VLAN id" || return; v=$A; get_ports "Ports" || return; queue "vlan del $v $P" ;;
+    2) get_port "Port" || return; p=$P; get_vid "VLAN id" || return; queue "l3 del $p $A" ;;
+    3) get_vid "VLAN id" || return; v=$A
+       while :; do ask "Address to remove, like 10.0.0.1/24 (blank = the whole interface, x = cancel)" ""
+         [ "$A" = "x" ] && return
+         [ -z "$A" ] && break
+         valid_addr "$A" && break; echo "  please enter an address with a prefix length"; done
+       queue "ip del $v $A" ;;
+    4) get_vid "Outer VLAN id of the tunnel" || return; queue "qinq del $A" ;;
+    5) ask "VRF name" ""; valid_name "$A" && queue "vrf del $A" || echo "  not a valid name" ;;
+    6) ask "VRF name" ""; valid_name "$A" && queue "gw del $A" || echo "  not a valid name" ;;
+  esac
+}
+apply_queue() {
+  [ -s "$IQ" ] || { echo "  nothing queued"; return; }
+  echo; echo "These changes will be applied, in this order:"
+  awk '{print "  " NR ") pvlan " $0}' "$IQ"
+  ask "Apply now? [y/n]" "y"
+  case "$A" in y|Y) ;; *) echo "  not applied, the changes stay queued"; return ;; esac
+  while IFS= read -r line; do
+    echo "> pvlan $line"
+    sh "$0" $line </dev/null || echo "  (that one reported a problem)"
+  done < "$IQ"
+  : > "$IQ"
+  echo; echo "Applied and saved. Current state:"; sh "$0" show
+}
+interactive() {
+  [ -t 0 ] || [ -n "$PVLAN_TEST_NOTTY" ] || { echo "pvlan -i needs a terminal. Run: docker exec -it <node> pvlan -i"; exit 1; }
+  IQ=/tmp/pvlan.queue.$$; : > "$IQ"; trap 'rm -f "$IQ"' EXIT
+  IPORTS=""; for kv in $PORT_MAP; do IPORTS="$IPORTS ${kv%%=*}"; done
+  [ -z "$IPORTS" ] && IPORTS=$(ip -o link show 2>/dev/null | awk -F': ' '{n=$2; sub(/@.*/,"",n); print n}' | grep -E '^eth[1-9]' | grep -v '\.' | tr '\n' ' ')
+  IPORTS=${IPORTS# }
+  echo "pvlan interactive mode. Answer the questions, changes are queued and applied when you choose 'a'."
+  while :; do
+    n=$(wc -l < "$IQ" | tr -d ' ')
+    echo; echo "Ports: $IPORTS      Queued changes: $n"
+    cat <<M
+ 1) VLAN on ports (access or trunk)
+ 2) Port with its own IP (tagged subinterface)
+ 3) IP on the switch itself in a VLAN
+ 4) Q-in-Q tunnel (add an outer tag)
+ 5) VRF and gateway
+ 6) Port isolation
+ 7) Outer tag type of the bridge (802.1Q or 802.1ad)
+ 8) Remove something
+ s) Show the current configuration
+ a) Review and apply the queued changes
+ q) Quit
+M
+    ask "Choose" ""
+    case "$A" in
+      1) act_vlan ;; 2) act_l3 ;; 3) act_ip ;; 4) act_qinq ;; 5) act_vrf ;; 6) act_isolate ;;
+      7) act_proto ;; 8) act_remove ;;
+      s|S) echo; sh "$0" show ;;
+      a|A) apply_queue ;;
+      q|Q|x)
+        if [ -s "$IQ" ]; then
+          ask "There are queued changes. [a]pply them, [d]iscard them, or [c]ontinue" "a"
+          case "$A" in a|A) apply_queue; [ -s "$IQ" ] || break ;; d|D) break ;; *) ;; esac
+        else break; fi ;;
+      *) echo "  please choose one of the letters or numbers above" ;;
+    esac
+  done
+  echo "Bye."
+}
+
 case "$1" in
+  -i|interactive) interactive ;;
   setup)
     vid=$2; shift 2 2>/dev/null
     [ -z "$vid" ] && { usage; exit 1; }
@@ -204,7 +424,7 @@ case "$1" in
     ensure_bridge
     [ $ad = 1 ] && ip link set br0 type bridge vlan_protocol 802.1ad
     for p in $members; do
-      ensure_port "$p"
+      ensure_port "$p" || continue
       bridge vlan del dev "$p" vid "$vid" 2>/dev/null
       if [ $tagged = 1 ]; then bridge vlan add dev "$p" vid "$vid"
       else bridge vlan add dev "$p" vid "$vid" pvid untagged; fi
@@ -215,13 +435,13 @@ case "$1" in
     done
     echo "VLAN $vid configured:"; "$0" show ;;
   vlan)
-    act=$2; vid=$3; shift 3
+    act=$2; vid=$3; shift 3 2>/dev/null
     tagged=0; ports=""
     for a in "$@"; do [ "$a" = "--tagged" ] && tagged=1 || ports="$ports $(resolve "$a")"; done
     [ -z "$vid" ] || [ -z "$ports" ] && { usage; exit 1; }
     for p in $ports; do
       case "$act" in
-        add) ensure_port "$p"
+        add) ensure_port "$p" || continue
              bridge vlan del dev "$p" vid "$vid" 2>/dev/null
              if [ $tagged = 1 ]; then bridge vlan add dev "$p" vid "$vid"
              else bridge vlan add dev "$p" vid "$vid" pvid untagged; fi ;;
@@ -235,6 +455,7 @@ case "$1" in
     fi
     p=$(resolve "$2"); vid=$3; addr=$4
     [ -z "$p" ] || [ -z "$vid" ] || [ -z "$addr" ] && { usage; exit 1; }
+    in_qinq "$p" && { echo "error: $2 is part of a Q-in-Q tunnel (see: pvlan qinq show)"; exit 1; }
     [ $# -ge 5 ] && { shift 4; parse_opts "$@"; } || { VRF=""; GW=""; }
     [ -n "$VRF" ] && { vrf_ensure "$VRF" || exit 1; }
     ip link set "$p" nomaster 2>/dev/null            # a port with its own IP cannot be a bridge port
@@ -303,11 +524,62 @@ case "$1" in
     if [ "$2" = "del" ]; then ip route del default vrf "$3"; exit $?; fi
     [ -z "$2" ] || [ -z "$3" ] && { usage; exit 1; }
     ip route replace default via "$3" vrf "$2" ;;
+  qinq)
+    case "$2" in
+      add)
+        up=$(resolve "$3"); outer=$4
+        { [ -z "$3" ] || [ -z "$outer" ] || [ -z "$5" ]; } && { usage; exit 1; }
+        case "$outer" in *[!0-9]*) echo "error: the outer VLAN must be a number"; exit 1 ;; esac
+        { [ "$outer" -ge 1 ] && [ "$outer" -le 4094 ]; } || { echo "error: the outer VLAN must be 1-4094"; exit 1; }
+        ip link show "$up" >/dev/null 2>&1 || { echo "error: no such port: $3"; exit 1; }
+        shift 4
+        for a in "$@"; do ip link show "$(resolve "$a")" >/dev/null 2>&1 || { echo "error: no such port: $a"; exit 1; }; done
+        b=qinq$outer
+        ip link show "$b" >/dev/null 2>&1 || ip link add "$b" type bridge vlan_filtering 0 vlan_default_pvid 0 || exit 1
+        ip link set "$b" up
+        # the uplink itself leaves the bridge, only the VLAN device on it is a bridge port
+        ip link set "$up" nomaster 2>/dev/null; ip addr flush dev "$up" 2>/dev/null; ip link set "$up" up
+        ip link show "$up.$outer" >/dev/null 2>&1 || ip link add link "$up" name "$up.$outer" type vlan id "$outer" protocol 802.1Q || exit 1
+        ip link set "$up.$outer" master "$b" && ip link set "$up.$outer" up
+        for a in "$@"; do
+          p=$(resolve "$a")
+          ip link set "$p" nomaster 2>/dev/null; ip addr flush dev "$p" 2>/dev/null
+          ip link set "$p" master "$b" && ip link set "$p" up
+        done
+        "$0" qinq show ;;
+      del)
+        outer=$3; [ -z "$outer" ] && { usage; exit 1; }
+        b=qinq$outer
+        ip link show "$b" >/dev/null 2>&1 || { echo "no Q-in-Q tunnel with outer tag $outer"; exit 1; }
+        line=$(qinq_list | awk -v b="$b" '$1==b')
+        up=$(echo "$line" | awk '{print $2}')
+        hosts=$(echo "$line" | awk '{for(i=4;i<=NF;i++) printf "%s ", $i}')
+        [ -n "$up" ] && ip link del "$up.$outer" 2>/dev/null
+        for h in $hosts; do ip link set "$h" nomaster; ensure_port "$h"; done
+        ip link del "$b"
+        # the uplink goes back to br0 when no other tunnel uses it
+        if [ -n "$up" ] && ! ip -o link show 2>/dev/null | grep -q " $up\.[0-9]*@$up:.* master qinq"; then ensure_port "$up"; fi ;;
+      show|"") MUT=""
+        t=$(qinq_list)
+        if [ -z "$t" ]; then echo "(none)"; else
+          echo "$t" | while read b up outer hosts; do
+            h=""; for x in $hosts; do h="$h $(rlabel "$x")"; done
+            echo "outer $outer: uplink $(rlabel "$up") ($up.$outer), ports:${h:- (none)}"
+          done
+        fi ;;
+      *) usage; exit 1 ;;
+    esac ;;
   isolate) shift; for a in "$@"; do bridge link set dev "$(resolve "$a")" isolated on; done ;;
   open)    shift; for a in "$@"; do bridge link set dev "$(resolve "$a")" isolated off; done ;;
   show)
     bridge vlan show
-    echo; echo "IP interfaces:"; ip -br addr show | grep -E '^(br0|eth[0-9]+)\.' || echo "(none)"
+    qdev=$(qinq_list | while read b up outer hosts; do echo "$up.$outer"; done)
+    echo; echo "IP interfaces:"
+    ipi=$(ip -br addr show | grep -E '^(br0|eth[0-9]+)\.' | while read l; do
+      n=${l%%[ @]*}; skip=""; for q in $qdev; do [ "$q" = "$n" ] && skip=1; done; [ -z "$skip" ] && echo "$l"
+    done)
+    echo "${ipi:-(none)}"
+    echo; echo "Q-in-Q tunnels:"; "$0" qinq show
     echo; echo "VRFs:"
     vrfs=$(ip -o link show type vrf 2>/dev/null | awk -F': ' '{n=$2; sub(/@.*/,"",n); print n}')
     if [ -z "$vrfs" ]; then echo "(none)"; else
